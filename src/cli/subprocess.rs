@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::cli::types::{ClaudeStreamEvent, UsageInfo};
@@ -36,8 +36,8 @@ pub struct CliArgs<'a> {
 /// itself run inside a Claude Code session without recursion.
 fn build_claude_command(args: &CliArgs) -> Command {
     let mut cmd = Command::new("claude");
+    // Prompt is piped via stdin to avoid OS argument length limits (E2BIG).
     cmd.arg("--print")
-        .arg(args.prompt)
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
@@ -61,11 +61,30 @@ fn build_claude_command(args: &CliArgs) -> Command {
     // Allow running inside Claude Code by removing CLAUDE_CODE env var
     cmd.env_remove("CLAUDE_CODE");
 
-    cmd.stdout(std::process::Stdio::piped())
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
     cmd
+}
+
+/// Write the prompt to the child's stdin and close it.
+///
+/// Closing stdin signals to the CLI that the full prompt has been provided.
+async fn write_prompt_to_stdin(
+    mut stdin: tokio::process::ChildStdin,
+    prompt: &str,
+) -> Result<(), ProxyError> {
+    stdin
+        .write_all(prompt.as_bytes())
+        .await
+        .map_err(|e| ProxyError::CliSpawnFailed(format!("Failed to write prompt to stdin: {e}")))?;
+    stdin
+        .shutdown()
+        .await
+        .map_err(|e| ProxyError::CliSpawnFailed(format!("Failed to close stdin: {e}")))?;
+    Ok(())
 }
 
 /// Spawn a [`Command`], translating I/O errors into [`ProxyError`].
@@ -120,6 +139,13 @@ pub struct CliToolCall {
 pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput, ProxyError> {
     let mut cmd = build_claude_command(args);
     let mut child = spawn_command(&mut cmd)?;
+
+    // Pipe prompt via stdin to avoid OS argument length limits (E2BIG)
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ProxyError::CliSpawnFailed("Failed to capture stdin".to_string()))?;
+    write_prompt_to_stdin(stdin, args.prompt).await?;
 
     let stdout = child
         .stdout
@@ -190,6 +216,13 @@ pub async fn spawn_claude_streaming(
 ) -> Result<(Child, tokio::process::ChildStdout), ProxyError> {
     let mut cmd = build_claude_command(args);
     let mut child = spawn_command(&mut cmd)?;
+
+    // Pipe prompt via stdin to avoid OS argument length limits (E2BIG)
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ProxyError::CliSpawnFailed("Failed to capture stdin".to_string()))?;
+    write_prompt_to_stdin(stdin, args.prompt).await?;
 
     let stdout = child
         .stdout
