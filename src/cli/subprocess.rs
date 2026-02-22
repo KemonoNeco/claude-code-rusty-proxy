@@ -187,7 +187,7 @@ pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput
 /// for killing/waiting on the child once done.
 pub async fn spawn_claude_streaming(
     args: &CliArgs<'_>,
-) -> Result<(tokio::process::Child, tokio::process::ChildStdout), ProxyError> {
+) -> Result<(Child, tokio::process::ChildStdout), ProxyError> {
     let mut cmd = build_claude_command(args);
     let mut child = spawn_command(&mut cmd)?;
 
@@ -479,9 +479,11 @@ mod tests {
     /// Token overflow uses saturating_add, so u32::MAX + 1 stays at MAX.
     #[test]
     fn test_token_overflow_saturating_add() {
-        let mut output = CliOutput::default();
-        output.input_tokens = u32::MAX;
-        output.output_tokens = u32::MAX;
+        let mut output = CliOutput {
+            input_tokens: u32::MAX,
+            output_tokens: u32::MAX,
+            ..Default::default()
+        };
 
         let ndjson = r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1},"message":{"content":[{"type":"text","text":"hi"}]}}"#;
         if let Some(event) = parse_event(ndjson) {

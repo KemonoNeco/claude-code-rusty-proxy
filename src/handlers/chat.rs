@@ -33,7 +33,7 @@ use crate::session::SessionManager;
 use crate::types::openai::{ChatCompletionRequest, Usage};
 
 /// Shared application state injected into every handler via Axum's
-/// [`State`](axum::extract::State) extractor.
+/// [`State`](State) extractor.
 pub struct AppState {
     pub config: Config,
     pub session_manager: SessionManager,
