@@ -14,6 +14,7 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -46,8 +47,13 @@ pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, ProxyError> {
+    let started = Instant::now();
+    let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+    let message_count = request.messages.len();
+
     // Validate request
     if request.messages.is_empty() {
+        tracing::warn!(request_id = %request_id, "rejected: \"messages array must not be empty\"");
         return Err(ProxyError::InvalidRequest(
             "messages array must not be empty".to_string(),
         ));
@@ -55,15 +61,37 @@ pub async fn chat_completions(
 
     // Resolve model
     let model = resolve_model(&request.model, &state.config.default_model);
-    let request_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
 
     // Convert messages
     let (system_prompt, prompt) = convert_messages(&request.messages);
     if prompt.is_empty() {
+        tracing::warn!(request_id = %request_id, "rejected: \"No user content in messages\"");
         return Err(ProxyError::InvalidRequest(
             "No user content in messages".to_string(),
         ));
     }
+
+    // Validate thread_id if present
+    if let Some(ref tid) = request.thread_id {
+        if tid.contains('\0') {
+            return Err(ProxyError::InvalidRequest(
+                "thread_id must not contain null bytes".to_string(),
+            ));
+        }
+        if tid.contains("..") {
+            return Err(ProxyError::InvalidRequest(
+                "thread_id must not contain path traversal sequences".to_string(),
+            ));
+        }
+    }
+
+    tracing::info!(
+        request_id = %request_id,
+        model = %model.display_name,
+        stream = request.stream,
+        messages = message_count,
+        "chat request"
+    );
 
     // Get session for resume
     let session_id = request
@@ -75,7 +103,7 @@ pub async fn chat_completions(
         // Streaming response
         let stream = create_sse_stream(
             SseParams {
-                request_id,
+                request_id: request_id.clone(),
                 model_id: model.id.to_string(),
                 model_display: model.display_name.to_string(),
                 prompt,
@@ -87,6 +115,8 @@ pub async fn chat_completions(
             state,
         )
         .await?;
+
+        tracing::info!(request_id = %request_id, "streaming started");
 
         Ok(Sse::new(stream)
             .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
@@ -100,7 +130,13 @@ pub async fn chat_completions(
             session_id: session_id.as_deref(),
             max_tokens: request.max_tokens,
         };
-        let output = subprocess::run_claude(&cli_args, &state.config).await?;
+        let output = match subprocess::run_claude(&cli_args, &state.config).await {
+            Ok(output) => output,
+            Err(e) => {
+                tracing::error!(request_id = %request_id, "cli_error: \"{}\"", e);
+                return Err(e);
+            }
+        };
 
         // Store session for resume
         if let Some(ref tid) = request.thread_id {
@@ -108,6 +144,15 @@ pub async fn chat_completions(
                 state.session_manager.store(tid, sid.clone());
             }
         }
+
+        let duration_ms = started.elapsed().as_millis();
+        tracing::info!(
+            request_id = %request_id,
+            input_tokens = output.input_tokens,
+            output_tokens = output.output_tokens,
+            duration_ms = duration_ms,
+            "completed"
+        );
 
         let resp = response::build_response(&request_id, model.display_name, &output);
         Ok(Json(resp).into_response())

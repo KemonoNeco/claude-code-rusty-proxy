@@ -137,7 +137,7 @@ pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput
         let mut lines = reader.lines();
         let mut stderr_output = String::new();
         while let Ok(Some(line)) = lines.next_line().await {
-            tracing::debug!(target: "claude_cli", "stderr: {}", line);
+            tracing::debug!(target: "claude_cli", "stderr: {}", truncate_str(&line, 200));
             if !stderr_output.is_empty() {
                 stderr_output.push('\n');
             }
@@ -202,7 +202,7 @@ pub async fn spawn_claude_streaming(
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::debug!(target: "claude_cli", "stderr: {}", line);
+                tracing::debug!(target: "claude_cli", "stderr: {}", truncate_str(&line, 200));
             }
         });
     }
