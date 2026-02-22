@@ -102,6 +102,22 @@ async fn test_chat_completions_empty_messages() {
     assert!(json["error"]["message"].as_str().unwrap().contains("empty"));
 }
 
+/// Assert the response body matches OpenAI error JSON structure.
+fn assert_openai_error(json: &serde_json::Value, expected_type: &str) {
+    assert!(json["error"].is_object(), "error field must be an object");
+    assert!(
+        json["error"]["message"].is_string(),
+        "error.message must be a string"
+    );
+    assert_eq!(
+        json["error"]["type"].as_str().unwrap(),
+        expected_type,
+        "error.type mismatch"
+    );
+    assert!(json["error"]["param"].is_null(), "error.param must be null");
+    assert!(json["error"]["code"].is_null(), "error.code must be null");
+}
+
 #[tokio::test]
 async fn test_chat_completions_invalid_json() {
     let app = build_app();
@@ -118,10 +134,14 @@ async fn test_chat_completions_invalid_json() {
         .unwrap();
 
     // Axum returns 422 for deserialization errors
-    assert!(
-        response.status() == StatusCode::BAD_REQUEST
-            || response.status() == StatusCode::UNPROCESSABLE_ENTITY
-    );
+    let status = response.status();
+    assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Axum's JSON rejection may not produce JSON, just verify the body is non-empty
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(!body.is_empty());
 }
 
 #[tokio::test]
@@ -143,4 +163,14 @@ async fn test_chat_completions_system_only_messages() {
 
     // System-only messages should fail validation (no user content)
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_openai_error(&json, "invalid_request_error");
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("No user content"));
 }

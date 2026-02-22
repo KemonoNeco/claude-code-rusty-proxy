@@ -2,19 +2,24 @@ use serde::{Deserialize, Serialize};
 
 /// OpenAI-compatible chat completion request.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub stream: bool,
+    /// Accepted for API compat, not forwarded to CLI.
     #[serde(default)]
+    #[allow(dead_code)]
     pub temperature: Option<f64>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Accepted for API compat, not forwarded to CLI.
     #[serde(default)]
+    #[allow(dead_code)]
     pub tools: Option<Vec<Tool>>,
+    /// Accepted for API compat, not forwarded to CLI.
     #[serde(default)]
+    #[allow(dead_code)]
     pub tool_choice: Option<serde_json::Value>,
     /// Thread ID for multi-turn session resume.
     #[serde(default)]

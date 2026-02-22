@@ -18,7 +18,6 @@ pub struct SessionManager {
     ttl: Duration,
 }
 
-#[allow(dead_code)]
 impl SessionManager {
     /// Create a new session manager with the given TTL.
     pub fn new(ttl: Duration) -> Self {
@@ -53,6 +52,7 @@ impl SessionManager {
     }
 
     /// Clear a specific session.
+    #[allow(dead_code)]
     pub fn clear(&self, thread_id: &str) {
         let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         sessions.remove(thread_id);
@@ -124,5 +124,47 @@ mod tests {
         mgr.cleanup_expired();
         let sessions = mgr.sessions.lock().unwrap();
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_retains_fresh_sessions() {
+        let mgr = SessionManager::new(Duration::from_secs(3600));
+        mgr.store("thread-1", "sess-1".to_string());
+        mgr.store("thread-2", "sess-2".to_string());
+        mgr.cleanup_expired();
+        // Both sessions should survive cleanup
+        assert_eq!(mgr.get("thread-1").as_deref(), Some("sess-1"));
+        assert_eq!(mgr.get("thread-2").as_deref(), Some("sess-2"));
+    }
+
+    #[test]
+    fn test_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let mgr = Arc::new(SessionManager::new(Duration::from_secs(3600)));
+        let mut handles = vec![];
+
+        // Spawn multiple threads doing concurrent store/get operations
+        for i in 0..10 {
+            let mgr = Arc::clone(&mgr);
+            handles.push(thread::spawn(move || {
+                let tid = format!("thread-{}", i);
+                let sid = format!("sess-{}", i);
+                mgr.store(&tid, sid.clone());
+                assert_eq!(mgr.get(&tid).as_deref(), Some(sid.as_str()));
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("thread should not panic");
+        }
+
+        // Verify all sessions are accessible
+        for i in 0..10 {
+            let tid = format!("thread-{}", i);
+            let sid = format!("sess-{}", i);
+            assert_eq!(mgr.get(&tid).as_deref(), Some(sid.as_str()));
+        }
     }
 }

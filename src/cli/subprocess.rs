@@ -5,11 +5,67 @@
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 use crate::cli::types::{ClaudeStreamEvent, UsageInfo};
 use crate::config::Config;
 use crate::error::ProxyError;
+
+/// Arguments for building a Claude CLI command.
+pub struct CliArgs<'a> {
+    pub prompt: &'a str,
+    pub system_prompt: Option<&'a str>,
+    pub model: &'a str,
+    pub session_id: Option<&'a str>,
+    /// Forward max_tokens to CLI `--max-tokens`.
+    pub max_tokens: Option<u32>,
+}
+
+/// Build a `Command` for the Claude CLI with the given arguments.
+fn build_claude_command(args: &CliArgs) -> Command {
+    let mut cmd = Command::new("claude");
+    cmd.arg("--print")
+        .arg(args.prompt)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--model")
+        .arg(args.model)
+        .arg("--max-turns")
+        .arg("1");
+
+    if let Some(system) = args.system_prompt {
+        cmd.arg("--system-prompt").arg(system);
+    }
+
+    if let Some(sid) = args.session_id {
+        cmd.arg("--resume").arg(sid);
+    }
+
+    if let Some(mt) = args.max_tokens {
+        cmd.arg("--max-tokens").arg(mt.to_string());
+    }
+
+    // Allow running inside Claude Code by removing CLAUDE_CODE env var
+    cmd.env_remove("CLAUDE_CODE");
+
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    cmd
+}
+
+/// Spawn a Command, mapping common errors to ProxyError.
+fn spawn_command(cmd: &mut Command) -> Result<Child, ProxyError> {
+    cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ProxyError::CliNotFound("Claude CLI binary not found".to_string())
+        } else {
+            ProxyError::CliSpawnFailed(format!("Failed to spawn claude: {}", e))
+        }
+    })
+}
 
 /// Parsed output from a Claude CLI invocation.
 #[derive(Debug, Default)]
@@ -39,46 +95,9 @@ pub struct CliToolCall {
 }
 
 /// Spawn the Claude CLI and collect its full output (non-streaming).
-pub async fn run_claude(
-    prompt: &str,
-    system_prompt: Option<&str>,
-    model: &str,
-    session_id: Option<&str>,
-    config: &Config,
-) -> Result<CliOutput, ProxyError> {
-    let mut cmd = Command::new("claude");
-    cmd.arg("--print")
-        .arg(prompt)
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--verbose")
-        .arg("--model")
-        .arg(model)
-        .arg("--max-turns")
-        .arg("1");
-
-    if let Some(system) = system_prompt {
-        cmd.arg("--system-prompt").arg(system);
-    }
-
-    if let Some(sid) = session_id {
-        cmd.arg("--resume").arg(sid);
-    }
-
-    // Allow running inside Claude Code by removing CLAUDE_CODE env var
-    cmd.env_remove("CLAUDE_CODE");
-
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ProxyError::CliNotFound("Claude CLI binary not found".to_string())
-        } else {
-            ProxyError::CliSpawnFailed(format!("Failed to spawn claude: {}", e))
-        }
-    })?;
+pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput, ProxyError> {
+    let mut cmd = build_claude_command(args);
+    let mut child = spawn_command(&mut cmd)?;
 
     let stdout = child
         .stdout
@@ -142,43 +161,10 @@ pub async fn run_claude(
 
 /// Spawn the Claude CLI and return the child process + a stream of events (for SSE streaming).
 pub async fn spawn_claude_streaming(
-    prompt: &str,
-    system_prompt: Option<&str>,
-    model: &str,
-    session_id: Option<&str>,
+    args: &CliArgs<'_>,
 ) -> Result<(tokio::process::Child, tokio::process::ChildStdout), ProxyError> {
-    let mut cmd = Command::new("claude");
-    cmd.arg("--print")
-        .arg(prompt)
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--verbose")
-        .arg("--model")
-        .arg(model)
-        .arg("--max-turns")
-        .arg("1");
-
-    if let Some(system) = system_prompt {
-        cmd.arg("--system-prompt").arg(system);
-    }
-
-    if let Some(sid) = session_id {
-        cmd.arg("--resume").arg(sid);
-    }
-
-    cmd.env_remove("CLAUDE_CODE");
-
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ProxyError::CliNotFound("Claude CLI binary not found".to_string())
-        } else {
-            ProxyError::CliSpawnFailed(format!("Failed to spawn claude: {}", e))
-        }
-    })?;
+    let mut cmd = build_claude_command(args);
+    let mut child = spawn_command(&mut cmd)?;
 
     let stdout = child
         .stdout

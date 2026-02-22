@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("  Listening on http://{}:{}", config.host, config.port);
+    println!("  Listening on https://{}:{}", config.host, config.port);
     println!("  Default model: {}", config.default_model);
     println!();
     println!("  Endpoints:");

@@ -116,4 +116,12 @@ mod tests {
         assert!(models.contains(&SONNET));
         assert!(models.contains(&HAIKU));
     }
+
+    #[test]
+    fn test_resolve_model_recursive_termination() {
+        // When both input and default are unrecognized, the recursive call uses
+        // "sonnet" as the fallback default, which must resolve.
+        let result = resolve_model("totally-unknown", "also-unknown");
+        assert_eq!(result, SONNET);
+    }
 }

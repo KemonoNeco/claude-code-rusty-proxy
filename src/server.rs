@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
@@ -19,6 +20,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health::health))
         .route("/v1/models", get(models::list_models))
         .route("/v1/chat/completions", post(chat::chat_completions))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -37,6 +39,17 @@ pub fn create_state(config: Config) -> Arc<AppState> {
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", config.host, config.port);
     let state = create_state(config);
+
+    // Spawn background task to clean up expired sessions every 5 minutes
+    let cleanup_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            cleanup_state.session_manager.cleanup_expired();
+        }
+    });
+
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -147,6 +147,26 @@ pub fn build_finish_chunk(
     }
 }
 
+/// Build an error content SSE chunk (sent before [DONE] on CLI failure).
+pub fn build_error_chunk(request_id: &str, model: &str, error_msg: &str) -> ChatCompletionChunk {
+    ChatCompletionChunk {
+        id: request_id.to_string(),
+        object: "chat.completion.chunk".to_string(),
+        created: chrono::Utc::now().timestamp(),
+        model: model.to_string(),
+        choices: vec![ChunkChoice {
+            index: 0,
+            delta: ChunkDelta {
+                role: None,
+                content: Some(format!("\n\n[Error: {}]", error_msg)),
+                tool_calls: None,
+            },
+            finish_reason: None,
+        }],
+        usage: None,
+    }
+}
+
 /// Convert CLI tool calls to OpenAI tool call format.
 fn convert_tool_calls(cli_calls: &[CliToolCall]) -> Vec<ToolCall> {
     cli_calls
@@ -320,10 +340,72 @@ mod tests {
                 arguments_json: r#"{"key":"val"}"#.to_string(),
             },
         ];
-        let openai_calls = super::convert_tool_calls(&cli_calls);
+        let openai_calls = convert_tool_calls(&cli_calls);
         assert_eq!(openai_calls.len(), 2);
         assert_eq!(openai_calls[0].r#type, "function");
         assert_eq!(openai_calls[0].function.name, "func1");
         assert_eq!(openai_calls[1].function.name, "func2");
+    }
+
+    #[test]
+    fn test_build_response_multiple_tool_calls() {
+        let output = CliOutput {
+            text_content: String::new(),
+            tool_calls: vec![
+                CliToolCall {
+                    id: "t1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments_json: r#"{"path":"a.rs"}"#.to_string(),
+                },
+                CliToolCall {
+                    id: "t2".to_string(),
+                    name: "write_file".to_string(),
+                    arguments_json: r#"{"path":"b.rs","content":"x"}"#.to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let response = build_response("id", "model", &output);
+        assert_eq!(response.choices[0].finish_reason, "tool_calls");
+        let tc = response.choices[0].message.tool_calls.as_ref().unwrap();
+        assert_eq!(tc.len(), 2);
+        assert_eq!(tc[0].function.name, "read_file");
+        assert_eq!(tc[1].function.name, "write_file");
+        assert_eq!(tc[0].r#type, "function");
+        assert_eq!(tc[1].r#type, "function");
+    }
+
+    #[test]
+    fn test_build_response_mixed_text_and_tools() {
+        let output = CliOutput {
+            text_content: "Let me check that file.".to_string(),
+            tool_calls: vec![CliToolCall {
+                id: "t1".to_string(),
+                name: "read_file".to_string(),
+                arguments_json: r#"{"path":"a.rs"}"#.to_string(),
+            }],
+            ..Default::default()
+        };
+        let response = build_response("id", "model", &output);
+        // When both text and tool calls exist, finish_reason should be tool_calls
+        assert_eq!(response.choices[0].finish_reason, "tool_calls");
+        // Content should still be present
+        assert_eq!(
+            response.choices[0].message.content.as_deref(),
+            Some("Let me check that file.")
+        );
+        assert!(response.choices[0].message.tool_calls.is_some());
+    }
+
+    #[test]
+    fn test_build_error_chunk() {
+        let chunk = build_error_chunk("chatcmpl-err", "claude-sonnet-4", "CLI exited with code 1");
+        assert_eq!(chunk.object, "chat.completion.chunk");
+        assert_eq!(chunk.id, "chatcmpl-err");
+        let content = chunk.choices[0].delta.content.as_deref().unwrap();
+        assert!(content.contains("[Error:"));
+        assert!(content.contains("CLI exited with code 1"));
+        assert!(chunk.choices[0].finish_reason.is_none());
+        assert!(chunk.usage.is_none());
     }
 }

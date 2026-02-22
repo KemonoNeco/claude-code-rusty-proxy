@@ -233,4 +233,41 @@ mod tests {
         assert!(prompt.contains("[Assistant: Hi!]"));
         assert!(prompt.contains("What time is it?"));
     }
+
+    #[test]
+    fn test_unknown_role_ignored() {
+        let messages = vec![
+            user_msg("Hello"),
+            ChatMessage {
+                role: "developer".to_string(),
+                content: Some(MessageContent::Text("secret".to_string())),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            user_msg("World"),
+        ];
+        let (_, prompt) = convert_messages(&messages);
+        assert!(!prompt.contains("secret"));
+        assert!(prompt.contains("Hello"));
+        assert!(prompt.contains("World"));
+    }
+
+    #[test]
+    fn test_empty_content_skipped() {
+        let messages = vec![
+            user_msg("Hello"),
+            ChatMessage {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text(String::new())),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            user_msg("World"),
+        ];
+        let (_, prompt) = convert_messages(&messages);
+        // Empty content should not add extra separators
+        assert_eq!(prompt, "Hello\n\nWorld");
+    }
 }
