@@ -236,11 +236,11 @@ mod tests {
     #[test]
     fn test_build_response_text() {
         let output = make_text_output("Hello world!");
-        let response = build_response("chatcmpl-123", "claude-sonnet-4", &output);
+        let response = build_response("chatcmpl-123", "claude-sonnet-4-6", &output);
 
         assert_eq!(response.id, "chatcmpl-123");
         assert_eq!(response.object, "chat.completion");
-        assert_eq!(response.model, "claude-sonnet-4");
+        assert_eq!(response.model, "claude-sonnet-4-6");
         assert_eq!(response.choices.len(), 1);
         assert_eq!(
             response.choices[0].message.content.as_deref(),
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_build_response_tool_calls() {
         let output = make_tool_output();
-        let response = build_response("chatcmpl-456", "claude-sonnet-4", &output);
+        let response = build_response("chatcmpl-456", "claude-sonnet-4-6", &output);
 
         assert_eq!(response.choices[0].finish_reason, "tool_calls");
         assert!(response.choices[0].message.content.is_none());
@@ -275,7 +275,7 @@ mod tests {
             result_text: Some("Fallback text".to_string()),
             ..Default::default()
         };
-        let response = build_response("chatcmpl-789", "claude-sonnet-4", &output);
+        let response = build_response("chatcmpl-789", "claude-sonnet-4-6", &output);
         assert_eq!(
             response.choices[0].message.content.as_deref(),
             Some("Fallback text")
@@ -299,7 +299,7 @@ mod tests {
     /// First SSE chunk has `role: "assistant"`, no content, no finish.
     #[test]
     fn test_build_first_chunk() {
-        let chunk = build_first_chunk("chatcmpl-123", "claude-sonnet-4");
+        let chunk = build_first_chunk("chatcmpl-123", "claude-sonnet-4-6");
         assert_eq!(chunk.object, "chat.completion.chunk");
         assert_eq!(chunk.choices[0].delta.role.as_deref(), Some("assistant"));
         assert!(chunk.choices[0].delta.content.is_none());
@@ -310,7 +310,7 @@ mod tests {
     /// Content chunk: no role, text in `content`, no finish.
     #[test]
     fn test_build_content_chunk() {
-        let chunk = build_content_chunk("chatcmpl-123", "claude-sonnet-4", "Hello");
+        let chunk = build_content_chunk("chatcmpl-123", "claude-sonnet-4-6", "Hello");
         assert!(chunk.choices[0].delta.role.is_none());
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
         assert!(chunk.choices[0].finish_reason.is_none());
@@ -324,7 +324,7 @@ mod tests {
             name: "search".to_string(),
             arguments_json: r#"{"q":"test"}"#.to_string(),
         };
-        let chunk = build_tool_call_chunk("chatcmpl-123", "claude-sonnet-4", 0, &tc);
+        let chunk = build_tool_call_chunk("chatcmpl-123", "claude-sonnet-4-6", 0, &tc);
         let delta_tc = &chunk.choices[0].delta.tool_calls.as_ref().unwrap()[0];
         assert_eq!(delta_tc.id.as_deref(), Some("call_1"));
         assert_eq!(delta_tc.function.name.as_deref(), Some("search"));
@@ -333,7 +333,7 @@ mod tests {
     /// Finish chunk with `"stop"` and no usage.
     #[test]
     fn test_build_finish_chunk_stop() {
-        let chunk = build_finish_chunk("chatcmpl-123", "claude-sonnet-4", "stop", None);
+        let chunk = build_finish_chunk("chatcmpl-123", "claude-sonnet-4-6", "stop", None);
         assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
         assert!(chunk.choices[0].delta.content.is_none());
         assert!(chunk.choices[0].delta.role.is_none());
@@ -348,7 +348,7 @@ mod tests {
             completion_tokens: 5,
             total_tokens: 15,
         };
-        let chunk = build_finish_chunk("chatcmpl-123", "claude-sonnet-4", "stop", Some(usage));
+        let chunk = build_finish_chunk("chatcmpl-123", "claude-sonnet-4-6", "stop", Some(usage));
         assert!(chunk.usage.is_some());
         assert_eq!(chunk.usage.unwrap().total_tokens, 15);
     }
@@ -431,7 +431,7 @@ mod tests {
     /// Error chunk injects `[Error: …]` text into the content delta.
     #[test]
     fn test_build_error_chunk() {
-        let chunk = build_error_chunk("chatcmpl-err", "claude-sonnet-4", "CLI exited with code 1");
+        let chunk = build_error_chunk("chatcmpl-err", "claude-sonnet-4-6", "CLI exited with code 1");
         assert_eq!(chunk.object, "chat.completion.chunk");
         assert_eq!(chunk.id, "chatcmpl-err");
         let content = chunk.choices[0].delta.content.as_deref().unwrap();

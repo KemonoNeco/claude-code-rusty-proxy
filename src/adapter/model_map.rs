@@ -1,6 +1,6 @@
 //! Flexible model name resolution.
 //!
-//! Accepts short aliases (`sonnet`), display names (`claude-sonnet-4`), and
+//! Accepts short aliases (`sonnet`), display names (`claude-sonnet-4-6`), and
 //! full dated IDs (`claude-sonnet-4-20250514`). Unrecognised names fall back
 //! to the configured default, which itself recurses with `"sonnet"` as the
 //! ultimate fallback to guarantee termination.
@@ -11,7 +11,7 @@
 pub struct ClaudeModel {
     /// Full model identifier passed to `--model` (e.g. `claude-sonnet-4-20250514`).
     pub id: &'static str,
-    /// Short display name returned in API responses (e.g. `claude-sonnet-4`).
+    /// Short display name returned in API responses (e.g. `claude-sonnet-4-6`).
     pub display_name: &'static str,
 }
 

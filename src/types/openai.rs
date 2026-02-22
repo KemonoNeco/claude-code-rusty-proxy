@@ -255,9 +255,9 @@ mod tests {
     /// Minimal request: only required fields, all optionals default.
     #[test]
     fn test_request_deserialization_minimal() {
-        let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hello"}]}"#;
+        let json = r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hello"}]}"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.model, "claude-sonnet-4");
+        assert_eq!(req.model, "claude-sonnet-4-6");
         assert_eq!(req.messages.len(), 1);
         assert!(!req.stream);
         assert!(req.temperature.is_none());
@@ -268,7 +268,7 @@ mod tests {
     /// The `stream` flag defaults to false; verify it deserialises as true.
     #[test]
     fn test_request_deserialization_with_stream() {
-        let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hi"}],"stream":true}"#;
+        let json = r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hi"}],"stream":true}"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert!(req.stream);
     }
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn test_request_deserialization_with_tools() {
         let json = r#"{
-            "model": "claude-sonnet-4",
+            "model": "claude-sonnet-4-6",
             "messages": [{"role": "user", "content": "What's the weather?"}],
             "tools": [{
                 "type": "function",
@@ -297,7 +297,7 @@ mod tests {
     /// The custom `thread_id` extension field should deserialise.
     #[test]
     fn test_request_with_thread_id() {
-        let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hi"}],"thread_id":"thread-123"}"#;
+        let json = r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Hi"}],"thread_id":"thread-123"}"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.thread_id.as_deref(), Some("thread-123"));
     }
@@ -344,7 +344,7 @@ mod tests {
             id: "chatcmpl-123".to_string(),
             object: "chat.completion".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![Choice {
                 index: 0,
                 message: ChoiceMessage {
@@ -376,7 +376,7 @@ mod tests {
             id: "chatcmpl-456".to_string(),
             object: "chat.completion".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![Choice {
                 index: 0,
                 message: ChoiceMessage {
@@ -408,7 +408,7 @@ mod tests {
             id: "chatcmpl-123".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![ChunkChoice {
                 index: 0,
                 delta: ChunkDelta {
@@ -434,7 +434,7 @@ mod tests {
             id: "chatcmpl-123".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![ChunkChoice {
                 index: 0,
                 delta: ChunkDelta {
@@ -458,7 +458,7 @@ mod tests {
             id: "chatcmpl-123".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![ChunkChoice {
                 index: 0,
                 delta: ChunkDelta {
@@ -486,7 +486,7 @@ mod tests {
             id: "chatcmpl-123".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "claude-sonnet-4".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             choices: vec![ChunkChoice {
                 index: 0,
                 delta: ChunkDelta {
@@ -519,13 +519,13 @@ mod tests {
             object: "list".to_string(),
             data: vec![
                 Model {
-                    id: "claude-opus-4".to_string(),
+                    id: "claude-opus-4-6".to_string(),
                     object: "model".to_string(),
                     created: 1700000000,
                     owned_by: "anthropic".to_string(),
                 },
                 Model {
-                    id: "claude-sonnet-4".to_string(),
+                    id: "claude-sonnet-4-6".to_string(),
                     object: "model".to_string(),
                     created: 1700000000,
                     owned_by: "anthropic".to_string(),
@@ -535,7 +535,7 @@ mod tests {
         let json = serde_json::to_value(&list).unwrap();
         assert_eq!(json["object"], "list");
         assert_eq!(json["data"].as_array().unwrap().len(), 2);
-        assert_eq!(json["data"][0]["id"], "claude-opus-4");
+        assert_eq!(json["data"][0]["id"], "claude-opus-4-6");
     }
 
     /// `Usage::default()` should zero-initialise all counters.

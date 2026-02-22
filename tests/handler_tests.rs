@@ -107,7 +107,7 @@ async fn test_chat_completions_empty_messages() {
                 .method("POST")
                 .uri("/v1/chat/completions")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"claude-sonnet-4","messages":[]}"#))
+                .body(Body::from(r#"{"model":"claude-sonnet-4-6","messages":[]}"#))
                 .unwrap(),
         )
         .await
@@ -177,7 +177,7 @@ async fn test_chat_completions_system_only_messages() {
                 .uri("/v1/chat/completions")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"model":"claude-sonnet-4","messages":[{"role":"system","content":"Just a system message"}]}"#,
+                    r#"{"model":"claude-sonnet-4-6","messages":[{"role":"system","content":"Just a system message"}]}"#,
                 ))
                 .unwrap(),
         )

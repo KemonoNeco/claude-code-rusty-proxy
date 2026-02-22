@@ -46,7 +46,7 @@ tests/
 
 - **Subprocess-per-request**: Each `/v1/chat/completions` call spawns a `claude --print` process. Streaming requests pipe stdout into SSE; non-streaming requests collect full output.
 - **Session resume**: The `thread_id` request field maps to Claude CLI's `--resume <session_id>`. Sessions are stored in-memory with a configurable TTL (10× timeout).
-- **Model name flexibility**: `resolve_model()` accepts `"sonnet"`, `"claude-sonnet-4"`, `"claude-sonnet-4-20250514"`, etc. Unrecognised names fall back to the configured default.
+- **Model name flexibility**: `resolve_model()` accepts `"sonnet"`, `"claude-sonnet-4-6"`, `"claude-sonnet-4-20250514"`, etc. Unrecognised names fall back to the configured default.
 - **OpenAI error shape**: All errors produce `{ "error": { "message", "type", "param", "code" } }` with appropriate HTTP status codes.
 
 ## Running tests

@@ -69,9 +69,9 @@ Lists available models in OpenAI format:
 {
   "object": "list",
   "data": [
-    { "id": "claude-opus-4", "object": "model", "owned_by": "anthropic", "created": 1700000000 },
-    { "id": "claude-sonnet-4", "object": "model", "owned_by": "anthropic", "created": 1700000000 },
-    { "id": "claude-haiku-4", "object": "model", "owned_by": "anthropic", "created": 1700000000 }
+    { "id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic", "created": 1700000000 },
+    { "id": "claude-sonnet-4-6", "object": "model", "owned_by": "anthropic", "created": 1700000000 },
+    { "id": "claude-haiku-4-5", "object": "model", "owned_by": "anthropic", "created": 1700000000 }
   ]
 }
 ```
@@ -84,7 +84,7 @@ OpenAI-compatible chat completion. Supports both streaming (`"stream": true`) an
 
 ```json
 {
-  "model": "claude-sonnet-4",
+  "model": "claude-sonnet-4-6",
   "messages": [
     { "role": "system", "content": "You are a helpful assistant." },
     { "role": "user", "content": "Hello!" }
@@ -99,9 +99,9 @@ OpenAI-compatible chat completion. Supports both streaming (`"stream": true`) an
 
 | Input | Resolves to |
 |-------|-------------|
-| `sonnet`, `claude-sonnet-4`, `claude-sonnet-4-20250514` | Claude Sonnet 4 |
-| `opus`, `claude-opus-4`, `claude-opus-4-20250514` | Claude Opus 4 |
-| `haiku`, `claude-haiku-4`, `claude-haiku-4-20250506` | Claude Haiku 4 |
+| `sonnet`, `claude-sonnet-4-6`, `claude-sonnet-4-20250514` | Claude Sonnet 4.6 |
+| `opus`, `claude-opus-4-6`, `claude-opus-4-20250514` | Claude Opus 4.6 |
+| `haiku`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
 | Unrecognized names (e.g. `gpt-4o`) | Falls back to `--default-model` |
 
 **Supported request fields:**
@@ -124,7 +124,7 @@ OpenAI-compatible chat completion. Supports both streaming (`"stream": true`) an
   "id": "chatcmpl-<uuid>",
   "object": "chat.completion",
   "created": 1700000000,
-  "model": "claude-sonnet-4",
+  "model": "claude-sonnet-4-6",
   "choices": [{
     "index": 0,
     "message": { "role": "assistant", "content": "Hello!" },
@@ -145,7 +145,11 @@ OpenAI-compatible chat completion. Supports both streaming (`"stream": true`) an
 Include a `thread_id` in your request to continue a conversation. The proxy maintains a session map that translates thread IDs to Claude CLI session IDs, enabling `--resume` across requests.
 
 ```json
-{ "model": "sonnet", "messages": [...], "thread_id": "my-thread-1" }
+{
+  "model": "sonnet",
+  "messages": [{ "role": "user", "content": "Hello!" }],
+  "thread_id": "my-thread-1"
+}
 ```
 
 Sessions are cleaned up automatically after a TTL (10x the configured timeout).

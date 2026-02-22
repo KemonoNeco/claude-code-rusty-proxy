@@ -12,9 +12,9 @@ Resolves flexible model name strings to concrete `ClaudeModel` values.
 
 | Input | Resolves to |
 |-------|-------------|
-| `sonnet`, `claude-sonnet-4`, `claude-sonnet-4-20250514` | Sonnet |
-| `opus`, `claude-opus-4`, `claude-opus-4-20250514` | Opus |
-| `haiku`, `claude-haiku-4`, `claude-haiku-4-20250506` | Haiku |
+| `sonnet`, `claude-sonnet-4-6`, `claude-sonnet-4-20250514` | Sonnet |
+| `opus`, `claude-opus-4-6`, `claude-opus-4-20250514` | Opus |
+| `haiku`, `claude-haiku-4-5`, `claude-haiku-4-5-20251001` | Haiku |
 | Anything else | Configured default (recursive, terminates at `sonnet`) |
 
 ### [`request.rs`](request.rs)
