@@ -87,9 +87,9 @@ async fn test_models_endpoint() {
     assert_eq!(models.len(), 3);
 
     let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
-    assert!(ids.contains(&"claude-opus-4"));
-    assert!(ids.contains(&"claude-sonnet-4"));
-    assert!(ids.contains(&"claude-haiku-4"));
+    assert!(ids.contains(&"claude-opus-4-6"));
+    assert!(ids.contains(&"claude-sonnet-4-6"));
+    assert!(ids.contains(&"claude-haiku-4-5"));
 
     for model in models {
         assert_eq!(model["object"], "model");
@@ -196,4 +196,284 @@ async fn test_chat_completions_system_only_messages() {
         .as_str()
         .unwrap()
         .contains("No user content"));
+}
+
+// ── Adversarial HTTP boundary tests ─────────────────────────────
+
+/// Body exceeding the 10 MB limit must be rejected (413 Payload Too Large).
+#[tokio::test]
+async fn test_body_limit_rejected() {
+    let app = build_app();
+    // Build a body just over 10 MB
+    let huge_content = "x".repeat(11 * 1024 * 1024);
+    let body_json = format!(
+        r#"{{"model":"sonnet","messages":[{{"role":"user","content":"{}"}}]}}"#,
+        huge_content
+    );
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(body_json))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// Missing Content-Type header on POST must be rejected (415 or 422).
+#[tokio::test]
+async fn test_missing_content_type() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .body(Body::from(
+                    r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    assert!(
+        status == StatusCode::UNSUPPORTED_MEDIA_TYPE || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "Expected 415 or 422, got {}",
+        status
+    );
+}
+
+/// Wrong Content-Type (text/plain) on POST must be rejected.
+#[tokio::test]
+async fn test_wrong_content_type() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "text/plain")
+                .body(Body::from(
+                    r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    assert!(
+        status == StatusCode::UNSUPPORTED_MEDIA_TYPE || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "Expected 415 or 422, got {}",
+        status
+    );
+}
+
+/// Messages with only unknown roles (e.g. "developer") produce no user
+/// content and must be rejected with 400.
+#[tokio::test]
+async fn test_messages_with_only_unknown_roles() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"sonnet","messages":[{"role":"developer","content":"secret stuff"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_openai_error(&json, "invalid_request_error");
+}
+
+/// Thread ID with path traversal characters must not cause filesystem access.
+/// The session manager is in-memory so this just verifies no crash.
+#[tokio::test]
+async fn test_thread_id_path_traversal() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"thread_id":"../../../etc/passwd"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should not crash — will fail trying to spawn CLI (503) but that's fine
+    let status = response.status();
+    assert!(
+        status == StatusCode::SERVICE_UNAVAILABLE
+            || status == StatusCode::INTERNAL_SERVER_ERROR
+            || status == StatusCode::GATEWAY_TIMEOUT,
+        "Expected a server error (CLI not available), got {}",
+        status
+    );
+}
+
+/// Thread ID with null bytes must not crash.
+#[tokio::test]
+async fn test_thread_id_null_bytes() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"thread_id":"thread\u0000evil"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should not crash
+    let status = response.status();
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "Expected error status, got {}",
+        status
+    );
+}
+
+/// Empty POST body must be rejected (400 or 422).
+#[tokio::test]
+async fn test_empty_body() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    assert!(
+        status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "Expected 400 or 422, got {}",
+        status
+    );
+}
+
+/// JSON array body instead of object must be rejected.
+#[tokio::test]
+async fn test_json_array_body() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"[{"role":"user","content":"Hi"}]"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    assert!(
+        status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "Expected 400 or 422, got {}",
+        status
+    );
+}
+
+/// GET on /v1/chat/completions must be rejected (405 Method Not Allowed).
+#[tokio::test]
+async fn test_wrong_method_on_chat() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/chat/completions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// POST on /health must be rejected (405 Method Not Allowed).
+#[tokio::test]
+async fn test_post_to_health() {
+    let app = build_app();
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/health")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// Deeply nested JSON content must not cause a stack overflow.
+#[tokio::test]
+async fn test_deeply_nested_json() {
+    let app = build_app();
+    // Build deeply nested content parts
+    let mut nested = r#"{"type":"text","text":"deep"}"#.to_string();
+    for _ in 0..100 {
+        nested = format!(r#"{{"type":"text","text":"layer","nested":{}}}"#, nested);
+    }
+    let body = format!(
+        r#"{{"model":"sonnet","messages":[{{"role":"user","content":[{}]}}]}}"#,
+        nested
+    );
+    let response: Response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should not stack overflow; will get some response (error or success attempt)
+    let status = response.status();
+    assert!(
+        status.is_client_error() || status.is_server_error() || status.is_success(),
+        "Should get some HTTP response, got {}",
+        status
+    );
 }

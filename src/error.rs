@@ -178,4 +178,36 @@ mod tests {
         assert!(json["error"]["param"].is_null());
         assert!(json["error"]["code"].is_null());
     }
+
+    // ── Adversarial / safety tests ──────────────────────────────────
+
+    /// Stderr content appears in the error JSON message (CliExitError).
+    #[tokio::test]
+    async fn test_stderr_passthrough_in_error() {
+        let stderr_content = "Authentication failed: invalid token XYZ";
+        let (status, json) = error_to_parts(ProxyError::CliExitError {
+            code: 1,
+            stderr: stderr_content.to_string(),
+        })
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(stderr_content));
+    }
+
+    /// Special characters (quotes, HTML, backslashes) in error messages
+    /// are properly JSON-escaped and don't break the response.
+    #[tokio::test]
+    async fn test_special_chars_in_error_message() {
+        let tricky = r#"Error: "quotes" & <html> and \backslash\ and null: "#.to_string()
+            + "\0end";
+        let (status, json) = error_to_parts(ProxyError::InvalidRequest(tricky.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // The message must be a valid JSON string
+        assert!(json["error"]["message"].is_string());
+        // The message must contain our tricky content (JSON-escaped)
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("quotes"));
+        assert!(msg.contains("<html>"));
+    }
 }

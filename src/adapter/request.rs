@@ -302,4 +302,71 @@ mod tests {
         // Empty content should not add extra separators
         assert_eq!(prompt, "Hello\n\nWorld");
     }
+
+    // ── Adversarial / edge case tests ───────────────────────────────
+
+    /// Tool name containing brackets doesn't confuse the formatting.
+    #[test]
+    fn test_tool_name_with_brackets() {
+        let messages = vec![
+            user_msg("Run it"),
+            tool_msg("call_1", "get[data]", "result"),
+        ];
+        let (_, prompt) = convert_messages(&messages);
+        assert!(prompt.contains("[Tool result for get[data] (call_1): result]"));
+    }
+
+    /// Empty tool arguments string doesn't crash.
+    #[test]
+    fn test_empty_tool_arguments() {
+        let messages = vec![
+            user_msg("Do it"),
+            assistant_with_tools(vec![ToolCall {
+                id: "call_1".to_string(),
+                r#type: "function".to_string(),
+                function: FunctionCall {
+                    name: "noop".to_string(),
+                    arguments: String::new(),
+                },
+            }]),
+        ];
+        let (_, prompt) = convert_messages(&messages);
+        assert!(prompt.contains("[Assistant used tools: noop()]"));
+    }
+
+    /// All messages with empty content produce an empty prompt.
+    #[test]
+    fn test_all_messages_empty_content() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: Some(MessageContent::Text(String::new())),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: Some(MessageContent::Text(String::new())),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+        let (system, prompt) = convert_messages(&messages);
+        assert!(system.is_none());
+        assert!(prompt.is_empty());
+    }
+
+    /// Nested brackets in assistant text are preserved correctly.
+    #[test]
+    fn test_nested_brackets_in_assistant() {
+        let messages = vec![
+            user_msg("Hello"),
+            assistant_msg("Use [brackets] and [[nested]]"),
+            user_msg("Thanks"),
+        ];
+        let (_, prompt) = convert_messages(&messages);
+        assert!(prompt.contains("[Assistant: Use [brackets] and [[nested]]]"));
+    }
 }

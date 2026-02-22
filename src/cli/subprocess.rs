@@ -473,4 +473,48 @@ mod tests {
         assert!(parse_event("").is_none());
         assert!(parse_event("   ").is_none());
     }
+
+    // ── Adversarial / safety tests ──────────────────────────────────
+
+    /// Token overflow uses saturating_add, so u32::MAX + 1 stays at MAX.
+    #[test]
+    fn test_token_overflow_saturating_add() {
+        let mut output = CliOutput::default();
+        output.input_tokens = u32::MAX;
+        output.output_tokens = u32::MAX;
+
+        let ndjson = r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1},"message":{"content":[{"type":"text","text":"hi"}]}}"#;
+        if let Some(event) = parse_event(ndjson) {
+            process_event(&mut output, &event);
+        }
+        assert_eq!(output.input_tokens, u32::MAX);
+        assert_eq!(output.output_tokens, u32::MAX);
+    }
+
+    /// Shell metacharacters in text are parsed safely (no injection).
+    #[test]
+    fn test_special_chars_in_text_parsed() {
+        let ndjson = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"$(rm -rf /) && `whoami` | <script>alert(1)</script>"}]}}"#;
+        let output = parse_ndjson_from_str(ndjson);
+        assert!(output.text_content.contains("$(rm -rf /)"));
+        assert!(output.text_content.contains("<script>"));
+    }
+
+    /// Truncation at a multi-byte boundary produces valid UTF-8.
+    #[test]
+    fn test_truncate_str_multibyte_boundary() {
+        let emoji = "Hello 🌍 World"; // 🌍 is 4 bytes
+        // Truncating in the middle of the emoji should back up
+        let result = truncate_str(emoji, 8); // "Hello " + partial 🌍
+        assert!(result.len() <= 8);
+        // Must be valid UTF-8
+        let _ = result.to_string();
+
+        // Truncation at exact boundary works
+        let ascii = "abcdefgh";
+        assert_eq!(truncate_str(ascii, 5), "abcde");
+
+        // Truncation beyond length returns the whole string
+        assert_eq!(truncate_str(ascii, 100), "abcdefgh");
+    }
 }

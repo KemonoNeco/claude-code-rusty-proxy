@@ -1,0 +1,13 @@
+# cargo-mutants configuration
+# See: https://mutants.rs/config.html
+
+# Exclude entry points and boilerplate that can't meaningfully be mutation-tested
+exclude_globs = ["src/main.rs"]
+
+# Exclude Debug impls, Display impls for error formatting, and async server bootstrap
+exclude_re = [
+    "impl Debug",
+    "fn main",
+    "async fn shutdown_signal",
+    "async fn run\\b",
+]

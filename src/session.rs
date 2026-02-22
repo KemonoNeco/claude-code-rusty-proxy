@@ -188,4 +188,96 @@ mod tests {
             assert_eq!(mgr.get(&tid).as_deref(), Some(sid.as_str()));
         }
     }
+
+    // ── Adversarial / stress tests ──────────────────────────────────
+
+    /// Very long thread ID (1MB key) stores and retrieves without panic.
+    #[test]
+    fn test_very_long_thread_id() {
+        let mgr = SessionManager::new(Duration::from_secs(3600));
+        let long_tid = "t".repeat(1_000_000);
+        mgr.store(&long_tid, "sess-long".to_string());
+        assert_eq!(mgr.get(&long_tid).as_deref(), Some("sess-long"));
+    }
+
+    /// Special characters (null, newline, tab) in thread IDs work correctly.
+    #[test]
+    fn test_special_chars_in_thread_id() {
+        let mgr = SessionManager::new(Duration::from_secs(3600));
+
+        let keys = [
+            "thread\0null",
+            "thread\nnewline",
+            "thread\ttab",
+            "\x00\x01\x02",
+        ];
+        for (i, key) in keys.iter().enumerate() {
+            let sid = format!("sess-{}", i);
+            mgr.store(key, sid.clone());
+            assert_eq!(mgr.get(key).as_deref(), Some(sid.as_str()));
+        }
+    }
+
+    /// High concurrency stress: 100 threads × 100 ops with no deadlock.
+    #[test]
+    fn test_high_concurrency_stress() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let mgr = Arc::new(SessionManager::new(Duration::from_secs(3600)));
+        let mut handles = vec![];
+
+        for t in 0..100 {
+            let mgr = Arc::clone(&mgr);
+            handles.push(thread::spawn(move || {
+                for i in 0..100 {
+                    let tid = format!("stress-{}-{}", t, i);
+                    let sid = format!("s-{}-{}", t, i);
+                    mgr.store(&tid, sid);
+                    // Intersperse reads with writes
+                    let _ = mgr.get(&tid);
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("thread should not panic or deadlock");
+        }
+    }
+
+    /// Cleanup racing with concurrent store/get must not panic.
+    #[test]
+    fn test_cleanup_during_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let mgr = Arc::new(SessionManager::new(Duration::from_secs(1)));
+        let mut handles = vec![];
+
+        // Writers
+        for t in 0..10 {
+            let mgr = Arc::clone(&mgr);
+            handles.push(thread::spawn(move || {
+                for i in 0..100 {
+                    let tid = format!("cleanup-{}-{}", t, i);
+                    mgr.store(&tid, format!("s-{}", i));
+                    let _ = mgr.get(&tid);
+                }
+            }));
+        }
+
+        // Concurrent cleanup
+        for _ in 0..5 {
+            let mgr = Arc::clone(&mgr);
+            handles.push(thread::spawn(move || {
+                for _ in 0..20 {
+                    mgr.cleanup_expired();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("thread should not panic");
+        }
+    }
 }

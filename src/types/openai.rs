@@ -563,4 +563,62 @@ mod tests {
         assert_eq!(parsed.id, "call_abc");
         assert_eq!(parsed.function.name, "search");
     }
+
+    // ── Adversarial deserialization tests ────────────────────────────
+
+    /// Missing `model` field must produce a serde error.
+    #[test]
+    fn test_deserialize_missing_model() {
+        let json = r#"{"messages":[{"role":"user","content":"Hi"}]}"#;
+        let result = serde_json::from_str::<ChatCompletionRequest>(json);
+        assert!(result.is_err());
+    }
+
+    /// `stream` as a string instead of bool must produce a serde error.
+    #[test]
+    fn test_deserialize_wrong_type_stream() {
+        let json = r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"stream":"yes"}"#;
+        let result = serde_json::from_str::<ChatCompletionRequest>(json);
+        assert!(result.is_err());
+    }
+
+    /// Unknown fields are silently ignored (no `deny_unknown_fields`).
+    #[test]
+    fn test_deserialize_extra_fields_ignored() {
+        let json = r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"unknown_field":"value","another":42}"#;
+        let result = serde_json::from_str::<ChatCompletionRequest>(json);
+        assert!(result.is_ok());
+    }
+
+    /// Negative `max_tokens` must fail since it's `Option<u32>`.
+    #[test]
+    fn test_deserialize_negative_max_tokens() {
+        let json = r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"max_tokens":-1}"#;
+        let result = serde_json::from_str::<ChatCompletionRequest>(json);
+        assert!(result.is_err());
+    }
+
+    /// `max_tokens` exceeding u32::MAX must fail.
+    #[test]
+    fn test_deserialize_overflow_max_tokens() {
+        let json = r#"{"model":"sonnet","messages":[{"role":"user","content":"Hi"}],"max_tokens":5000000000}"#;
+        let result = serde_json::from_str::<ChatCompletionRequest>(json);
+        assert!(result.is_err());
+    }
+
+    /// Empty content parts array deserialises ok and yields empty text.
+    #[test]
+    fn test_empty_content_parts_array() {
+        let json = r#"{"role":"user","content":[]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content.unwrap().to_text(), "");
+    }
+
+    /// Non-text content parts (e.g. image) are skipped in `to_text()`.
+    #[test]
+    fn test_non_text_content_parts() {
+        let json = r#"{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/img.png"}}]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.content.unwrap().to_text(), "");
+    }
 }
