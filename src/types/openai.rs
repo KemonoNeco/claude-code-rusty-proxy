@@ -1,55 +1,78 @@
+//! OpenAI-compatible wire types for chat completions.
+//!
+//! All structs derive `Serialize` and/or `Deserialize` so they can be used
+//! directly with [`axum::Json`]. Fields that are accepted for API
+//! compatibility but not forwarded to the CLI are marked as such.
+
 use serde::{Deserialize, Serialize};
 
-/// OpenAI-compatible chat completion request.
+/// Incoming `POST /v1/chat/completions` request body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionRequest {
+    /// Model identifier (resolved via [`crate::adapter::model_map`]).
     pub model: String,
+    /// Conversation messages (system, user, assistant, tool).
     pub messages: Vec<ChatMessage>,
+    /// When `true` the response is streamed as SSE chunks.
     #[serde(default)]
     pub stream: bool,
-    /// Accepted for API compat, not forwarded to CLI.
+    /// Accepted for API compat, **not** forwarded to the CLI.
     #[serde(default)]
     #[allow(dead_code)]
     pub temperature: Option<f64>,
+    /// Forwarded to `claude --max-tokens`.
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    /// Accepted for API compat, not forwarded to CLI.
+    /// Accepted for API compat, **not** forwarded to the CLI.
     #[serde(default)]
     #[allow(dead_code)]
     pub tools: Option<Vec<Tool>>,
-    /// Accepted for API compat, not forwarded to CLI.
+    /// Accepted for API compat, **not** forwarded to the CLI.
     #[serde(default)]
     #[allow(dead_code)]
     pub tool_choice: Option<serde_json::Value>,
-    /// Thread ID for multi-turn session resume.
+    /// Optional thread ID used to resume a previous CLI session.
     #[serde(default)]
     pub thread_id: Option<String>,
 }
 
-/// A single message in the chat conversation.
+/// A single message in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
+    /// One of `"system"`, `"user"`, `"assistant"`, or `"tool"`.
     pub role: String,
+    /// Text or multi-part content. May be `null` for tool-call-only messages.
     #[serde(default)]
     pub content: Option<MessageContent>,
+    /// Tool name (present on `tool` role messages).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Tool calls made by the assistant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// ID of the tool call this message is responding to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
 }
 
-/// Message content can be a simple string or an array of content parts.
+/// Message content — either a plain string or an array of typed parts.
+///
+/// Deserialised with `#[serde(untagged)]` so both `"hello"` and
+/// `[{"type":"text","text":"hello"}]` are accepted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MessageContent {
+    /// Simple text string.
     Text(String),
+    /// Array of content parts (text, image, etc.).
     Parts(Vec<ContentPart>),
 }
 
 impl MessageContent {
-    /// Extract text content, joining parts if necessary.
+    /// Flatten the content into a single text string.
+    ///
+    /// For [`Parts`](Self::Parts), only `"text"` parts are included and
+    /// concatenated without a separator.
     pub fn to_text(&self) -> String {
         match self {
             MessageContent::Text(s) => s.clone(),
@@ -218,8 +241,18 @@ pub struct Model {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for OpenAI type serialisation / deserialisation.
+    //!
+    //! These validate that:
+    //! - Requests deserialise correctly from minimal and full JSON payloads.
+    //! - The untagged `MessageContent` enum handles both string and array forms.
+    //! - Response and chunk structs serialise into the expected OpenAI shape.
+    //! - Optional fields (`tool_calls`, `usage`) are omitted when `None`.
+    //! - `ToolCall` survives a serialize-then-deserialize round-trip.
+
     use super::*;
 
+    /// Minimal request: only required fields, all optionals default.
     #[test]
     fn test_request_deserialization_minimal() {
         let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hello"}]}"#;
@@ -232,6 +265,7 @@ mod tests {
         assert!(req.tools.is_none());
     }
 
+    /// The `stream` flag defaults to false; verify it deserialises as true.
     #[test]
     fn test_request_deserialization_with_stream() {
         let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hi"}],"stream":true}"#;
@@ -239,6 +273,7 @@ mod tests {
         assert!(req.stream);
     }
 
+    /// A request carrying a `tools` array should deserialise the function name.
     #[test]
     fn test_request_deserialization_with_tools() {
         let json = r#"{
@@ -259,6 +294,7 @@ mod tests {
         assert_eq!(tools[0].function.name, "get_weather");
     }
 
+    /// The custom `thread_id` extension field should deserialise.
     #[test]
     fn test_request_with_thread_id() {
         let json = r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"Hi"}],"thread_id":"thread-123"}"#;
@@ -266,6 +302,7 @@ mod tests {
         assert_eq!(req.thread_id.as_deref(), Some("thread-123"));
     }
 
+    /// Simple string content should round-trip through `to_text()`.
     #[test]
     fn test_message_content_text() {
         let json = r#"{"role":"user","content":"Hello"}"#;
@@ -273,6 +310,7 @@ mod tests {
         assert_eq!(msg.content.unwrap().to_text(), "Hello");
     }
 
+    /// Multi-part content should concatenate text parts.
     #[test]
     fn test_message_content_parts() {
         let json = r#"{"role":"user","content":[{"type":"text","text":"Hello "},{"type":"text","text":"world"}]}"#;
@@ -280,6 +318,7 @@ mod tests {
         assert_eq!(msg.content.unwrap().to_text(), "Hello world");
     }
 
+    /// `content: null` with `tool_calls` present (assistant tool-call message).
     #[test]
     fn test_message_content_null() {
         let json = r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"test","arguments":"{}"}}]}"#;
@@ -288,6 +327,7 @@ mod tests {
         assert!(msg.tool_calls.is_some());
     }
 
+    /// Tool-result message carries `role: "tool"` and a `tool_call_id`.
     #[test]
     fn test_message_with_tool_call_id() {
         let json = r#"{"role":"tool","content":"result data","tool_call_id":"call_1"}"#;
@@ -296,6 +336,8 @@ mod tests {
         assert_eq!(msg.tool_call_id.as_deref(), Some("call_1"));
     }
 
+    /// Non-streaming response serialises with the expected OpenAI fields;
+    /// `tool_calls` is absent when `None`.
     #[test]
     fn test_response_serialization() {
         let response = ChatCompletionResponse {
@@ -327,6 +369,7 @@ mod tests {
         assert!(json["choices"][0]["message"].get("tool_calls").is_none());
     }
 
+    /// Response with `tool_calls` should have `finish_reason: "tool_calls"`.
     #[test]
     fn test_response_with_tool_calls() {
         let response = ChatCompletionResponse {
@@ -358,6 +401,7 @@ mod tests {
         assert_eq!(tc["function"]["name"], "get_weather");
     }
 
+    /// First SSE chunk: carries `role` but no content or finish_reason.
     #[test]
     fn test_chunk_serialization_first_chunk() {
         let chunk = ChatCompletionChunk {
@@ -383,6 +427,7 @@ mod tests {
         assert!(json.get("usage").is_none());
     }
 
+    /// Content-delta chunk: `role` absent, `content` present.
     #[test]
     fn test_chunk_serialization_content_delta() {
         let chunk = ChatCompletionChunk {
@@ -406,6 +451,7 @@ mod tests {
         assert_eq!(json["choices"][0]["delta"]["content"], "Hello");
     }
 
+    /// Finish chunk: `finish_reason` set, `usage` present.
     #[test]
     fn test_chunk_serialization_finish() {
         let chunk = ChatCompletionChunk {
@@ -433,6 +479,7 @@ mod tests {
         assert_eq!(json["usage"]["total_tokens"], 15);
     }
 
+    /// Tool-call chunk carries `delta.tool_calls` with id, type, and function.
     #[test]
     fn test_chunk_with_tool_calls() {
         let chunk = ChatCompletionChunk {
@@ -465,6 +512,7 @@ mod tests {
         assert_eq!(tc["function"]["name"], "get_weather");
     }
 
+    /// `ModelList` serialises with `object: "list"` and a `data` array.
     #[test]
     fn test_model_list_serialization() {
         let list = ModelList {
@@ -490,6 +538,7 @@ mod tests {
         assert_eq!(json["data"][0]["id"], "claude-opus-4");
     }
 
+    /// `Usage::default()` should zero-initialise all counters.
     #[test]
     fn test_usage_default() {
         let usage = Usage::default();
@@ -498,6 +547,7 @@ mod tests {
         assert_eq!(usage.total_tokens, 0);
     }
 
+    /// Serialize then deserialize a `ToolCall` to verify serde round-trip.
     #[test]
     fn test_tool_call_roundtrip() {
         let tc = ToolCall {

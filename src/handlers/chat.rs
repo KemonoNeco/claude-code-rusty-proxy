@@ -1,4 +1,16 @@
-//! Chat completion handler (streaming + non-streaming).
+//! `POST /v1/chat/completions` – the core endpoint.
+//!
+//! Handles both **non-streaming** (returns a single JSON response) and
+//! **streaming** (returns a Server-Sent Events stream of `chat.completion.chunk`
+//! objects) modes.
+//!
+//! ## Request flow
+//!
+//! 1. Validate the incoming [`ChatCompletionRequest`].
+//! 2. Resolve the model name to a concrete Claude model ID.
+//! 3. Convert the OpenAI messages array into a CLI-compatible prompt.
+//! 4. Look up an existing Claude CLI session (for `--resume`).
+//! 5. Either collect full output (non-streaming) or open an SSE stream.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -19,13 +31,17 @@ use crate::error::ProxyError;
 use crate::session::SessionManager;
 use crate::types::openai::{ChatCompletionRequest, Usage};
 
-/// Shared application state.
+/// Shared application state injected into every handler via Axum's
+/// [`State`](axum::extract::State) extractor.
 pub struct AppState {
     pub config: Config,
     pub session_manager: SessionManager,
 }
 
-/// POST /v1/chat/completions
+/// `POST /v1/chat/completions`
+///
+/// Dispatches to either the non-streaming or SSE-streaming path based on
+/// `request.stream`.
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatCompletionRequest>,
@@ -98,7 +114,8 @@ pub async fn chat_completions(
     }
 }
 
-/// Parameters for SSE stream creation.
+/// All the data needed to start an SSE stream, moved into the async
+/// closure that produces chunks.
 struct SseParams {
     request_id: String,
     model_id: String,
@@ -110,7 +127,15 @@ struct SseParams {
     max_tokens: Option<u32>,
 }
 
-/// Create an SSE str1eam from Claude CLI output.
+/// Spawn the Claude CLI in streaming mode and return an async [`Stream`]
+/// of SSE [`Event`]s.
+///
+/// The stream emits:
+/// * One initial chunk with `role: "assistant"`.
+/// * Content delta chunks for each text block.
+/// * Tool-call delta chunks for each tool-use block.
+/// * A finish chunk with `finish_reason` and accumulated `usage`.
+/// * A final `[DONE]` sentinel.
 async fn create_sse_stream(
     params: SseParams,
     state: Arc<AppState>,

@@ -1,3 +1,13 @@
+//! Unified error type that maps proxy failures to OpenAI-shaped JSON responses.
+//!
+//! Every variant carries enough context to produce both a human-readable
+//! message and the correct HTTP status code. The [`IntoResponse`] impl
+//! serialises the error into the standard OpenAI error envelope:
+//!
+//! ```json
+//! { "error": { "message": "...", "type": "...", "param": null, "code": null } }
+//! ```
+
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -83,9 +93,14 @@ impl IntoResponse for ProxyError {
 
 #[cfg(test)]
 mod tests {
+    //! Verify each `ProxyError` variant produces the correct HTTP status and
+    //! OpenAI-shaped error JSON (`error.message`, `error.type`, `error.param`,
+    //! `error.code`).
+
     use super::*;
     use axum::body::to_bytes;
 
+    /// Helper: convert a `ProxyError` into its HTTP status + JSON body.
     async fn error_to_parts(error: ProxyError) -> (StatusCode, serde_json::Value) {
         let response = error.into_response();
         let status = response.status();
@@ -94,6 +109,7 @@ mod tests {
         (status, json)
     }
 
+    /// `CliNotFound` -> 503 Service Unavailable.
     #[tokio::test]
     async fn test_cli_not_found() {
         let (status, json) = error_to_parts(ProxyError::CliNotFound("not found".into())).await;
@@ -105,6 +121,7 @@ mod tests {
             .contains("not found"));
     }
 
+    /// `CliSpawnFailed` -> 500 Internal Server Error.
     #[tokio::test]
     async fn test_cli_spawn_failed() {
         let (status, json) =
@@ -113,6 +130,7 @@ mod tests {
         assert_eq!(json["error"]["type"], "server_error");
     }
 
+    /// `CliTimeout` -> 504 Gateway Timeout.
     #[tokio::test]
     async fn test_cli_timeout() {
         let (status, json) = error_to_parts(ProxyError::CliTimeout(300)).await;
@@ -121,6 +139,7 @@ mod tests {
         assert!(json["error"]["message"].as_str().unwrap().contains("300"));
     }
 
+    /// `CliExitError` -> 500 Internal Server Error with exit code in message.
     #[tokio::test]
     async fn test_cli_exit_error() {
         let (status, json) = error_to_parts(ProxyError::CliExitError {
@@ -132,6 +151,7 @@ mod tests {
         assert_eq!(json["error"]["type"], "server_error");
     }
 
+    /// `InvalidRequest` -> 400 Bad Request with `invalid_request_error` type.
     #[tokio::test]
     async fn test_invalid_request() {
         let (status, json) =
@@ -140,6 +160,7 @@ mod tests {
         assert_eq!(json["error"]["type"], "invalid_request_error");
     }
 
+    /// `Internal` -> 500 Internal Server Error.
     #[tokio::test]
     async fn test_internal_error() {
         let (status, json) = error_to_parts(ProxyError::Internal("unexpected".into())).await;
@@ -147,6 +168,7 @@ mod tests {
         assert_eq!(json["error"]["type"], "server_error");
     }
 
+    /// The error envelope must always contain `message`, `type`, `param`, `code`.
     #[tokio::test]
     async fn test_error_json_shape() {
         let (_, json) = error_to_parts(ProxyError::InvalidRequest("test".into())).await;

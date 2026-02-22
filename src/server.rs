@@ -1,4 +1,8 @@
-//! Axum server setup with CORS and graceful shutdown.
+//! HTTP server bootstrap: router construction, shared state, and graceful shutdown.
+//!
+//! The server uses [`axum`] with permissive CORS (for browser-based clients)
+//! and a 10 MB request body limit. A background task periodically purges
+//! expired session mappings from the [`SessionManager`].
 
 use std::sync::Arc;
 
@@ -14,7 +18,12 @@ use crate::handlers::health;
 use crate::handlers::models;
 use crate::session::SessionManager;
 
-/// Build the Axum router with all routes.
+/// Construct the Axum [`Router`] with all routes wired to the shared `state`.
+///
+/// Layers applied (outermost first):
+/// * `TraceLayer` – request/response tracing via `tracing`
+/// * `CorsLayer::permissive` – allow any origin
+/// * `DefaultBodyLimit` – cap request bodies at 10 MB
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health::health))
@@ -26,7 +35,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Create the shared application state.
+/// Build the [`Arc<AppState>`] that is shared across all request handlers.
+///
+/// Session TTL is set to 10 × the configured request timeout so that
+/// multi-turn conversations survive between requests.
 pub fn create_state(config: Config) -> Arc<AppState> {
     let ttl = std::time::Duration::from_secs(config.timeout * 10);
     Arc::new(AppState {
@@ -35,12 +47,14 @@ pub fn create_state(config: Config) -> Arc<AppState> {
     })
 }
 
-/// Run the server with graceful shutdown.
+/// Bind, serve, and block until a shutdown signal is received.
+///
+/// A background tokio task runs every 5 minutes to evict expired sessions.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", config.host, config.port);
     let state = create_state(config);
 
-    // Spawn background task to clean up expired sessions every 5 minutes
+    // Periodic session cleanup (every 5 min).
     let cleanup_state = Arc::clone(&state);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
@@ -62,7 +76,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Wait for SIGINT or SIGTERM for graceful shutdown.
+/// Block until either `SIGINT` (Ctrl-C) or `SIGTERM` is received.
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()

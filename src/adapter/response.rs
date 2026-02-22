@@ -1,9 +1,16 @@
-//! Convert CLI output to OpenAI response/SSE chunk format.
+//! Build OpenAI-shaped response objects from Claude CLI output.
+//!
+//! Provides builders for both the non-streaming [`ChatCompletionResponse`] and
+//! the individual SSE [`ChatCompletionChunk`]s (first chunk, content deltas,
+//! tool-call deltas, finish, and error).
 
 use crate::cli::subprocess::{CliOutput, CliToolCall};
 use crate::types::openai::*;
 
-/// Build an OpenAI `ChatCompletionResponse` from CLI output.
+/// Build a complete [`ChatCompletionResponse`] from collected CLI output.
+///
+/// * If tool calls are present, `finish_reason` is `"tool_calls"`.
+/// * If `text_content` is empty, falls back to `result_text`.
 pub fn build_response(request_id: &str, model: &str, output: &CliOutput) -> ChatCompletionResponse {
     let has_tool_calls = !output.tool_calls.is_empty();
 
@@ -49,7 +56,7 @@ pub fn build_response(request_id: &str, model: &str, output: &CliOutput) -> Chat
     }
 }
 
-/// Build the first SSE chunk (with role).
+/// Build the opening SSE chunk that carries `role: "assistant"` and no content.
 pub fn build_first_chunk(request_id: &str, model: &str) -> ChatCompletionChunk {
     ChatCompletionChunk {
         id: request_id.to_string(),
@@ -69,7 +76,7 @@ pub fn build_first_chunk(request_id: &str, model: &str) -> ChatCompletionChunk {
     }
 }
 
-/// Build a content delta SSE chunk.
+/// Build an SSE chunk carrying a text content delta.
 pub fn build_content_chunk(request_id: &str, model: &str, text: &str) -> ChatCompletionChunk {
     ChatCompletionChunk {
         id: request_id.to_string(),
@@ -89,7 +96,7 @@ pub fn build_content_chunk(request_id: &str, model: &str, text: &str) -> ChatCom
     }
 }
 
-/// Build a tool call delta SSE chunk.
+/// Build an SSE chunk carrying a tool-call delta (one per tool invocation).
 pub fn build_tool_call_chunk(
     request_id: &str,
     model: &str,
@@ -122,7 +129,7 @@ pub fn build_tool_call_chunk(
     }
 }
 
-/// Build the finish SSE chunk.
+/// Build the final SSE chunk with `finish_reason` and optional accumulated `usage`.
 pub fn build_finish_chunk(
     request_id: &str,
     model: &str,
@@ -147,7 +154,10 @@ pub fn build_finish_chunk(
     }
 }
 
-/// Build an error content SSE chunk (sent before [DONE] on CLI failure).
+/// Build an SSE content chunk that injects an `[Error: …]` message.
+///
+/// Sent when the CLI exits with a non-zero status before producing a
+/// `result` event.
 pub fn build_error_chunk(request_id: &str, model: &str, error_msg: &str) -> ChatCompletionChunk {
     ChatCompletionChunk {
         id: request_id.to_string(),
@@ -184,8 +194,15 @@ fn convert_tool_calls(cli_calls: &[CliToolCall]) -> Vec<ToolCall> {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for CLI-output-to-OpenAI-response conversion.
+    //!
+    //! Covers text responses, tool-call responses, fallback to `result_text`,
+    //! usage mapping, SSE chunk builders (first, content, tool-call, finish,
+    //! error), and multi-tool-call / mixed-content edge cases.
+
     use super::*;
 
+    /// Helper: build a text-only `CliOutput`.
     fn make_text_output(text: &str) -> CliOutput {
         CliOutput {
             session_id: Some("sess-1".to_string()),
@@ -198,6 +215,7 @@ mod tests {
         }
     }
 
+    /// Helper: build a tool-call-only `CliOutput`.
     fn make_tool_output() -> CliOutput {
         CliOutput {
             session_id: Some("sess-1".to_string()),
@@ -214,6 +232,7 @@ mod tests {
         }
     }
 
+    /// Text-only response: content present, `finish_reason: "stop"`, no tool_calls.
     #[test]
     fn test_build_response_text() {
         let output = make_text_output("Hello world!");
@@ -234,6 +253,7 @@ mod tests {
         assert_eq!(response.usage.total_tokens, 150);
     }
 
+    /// Tool-call response: `finish_reason: "tool_calls"`, content is `None`.
     #[test]
     fn test_build_response_tool_calls() {
         let output = make_tool_output();
@@ -247,6 +267,7 @@ mod tests {
         assert_eq!(tc[0].function.name, "get_weather");
     }
 
+    /// When `text_content` is empty, `result_text` is used as fallback content.
     #[test]
     fn test_build_response_fallback_to_result_text() {
         let output = CliOutput {
@@ -261,6 +282,7 @@ mod tests {
         );
     }
 
+    /// `input_tokens` maps to `prompt_tokens`; total is their sum.
     #[test]
     fn test_build_response_usage_mapping() {
         let output = CliOutput {
@@ -274,6 +296,7 @@ mod tests {
         assert_eq!(response.usage.total_tokens, 300);
     }
 
+    /// First SSE chunk has `role: "assistant"`, no content, no finish.
     #[test]
     fn test_build_first_chunk() {
         let chunk = build_first_chunk("chatcmpl-123", "claude-sonnet-4");
@@ -284,6 +307,7 @@ mod tests {
         assert!(chunk.usage.is_none());
     }
 
+    /// Content chunk: no role, text in `content`, no finish.
     #[test]
     fn test_build_content_chunk() {
         let chunk = build_content_chunk("chatcmpl-123", "claude-sonnet-4", "Hello");
@@ -292,6 +316,7 @@ mod tests {
         assert!(chunk.choices[0].finish_reason.is_none());
     }
 
+    /// Tool-call chunk carries `delta.tool_calls[0]` with id and function.
     #[test]
     fn test_build_tool_call_chunk() {
         let tc = CliToolCall {
@@ -305,6 +330,7 @@ mod tests {
         assert_eq!(delta_tc.function.name.as_deref(), Some("search"));
     }
 
+    /// Finish chunk with `"stop"` and no usage.
     #[test]
     fn test_build_finish_chunk_stop() {
         let chunk = build_finish_chunk("chatcmpl-123", "claude-sonnet-4", "stop", None);
@@ -314,6 +340,7 @@ mod tests {
         assert!(chunk.usage.is_none());
     }
 
+    /// Finish chunk with accumulated usage present.
     #[test]
     fn test_build_finish_chunk_with_usage() {
         let usage = Usage {
@@ -326,6 +353,7 @@ mod tests {
         assert_eq!(chunk.usage.unwrap().total_tokens, 15);
     }
 
+    /// `convert_tool_calls` maps `CliToolCall` vec to OpenAI `ToolCall` vec.
     #[test]
     fn test_convert_tool_calls() {
         let cli_calls = vec![
@@ -347,6 +375,7 @@ mod tests {
         assert_eq!(openai_calls[1].function.name, "func2");
     }
 
+    /// Multiple tool calls in a single response.
     #[test]
     fn test_build_response_multiple_tool_calls() {
         let output = CliOutput {
@@ -375,6 +404,8 @@ mod tests {
         assert_eq!(tc[1].r#type, "function");
     }
 
+    /// When both text and tool calls exist, `finish_reason` is `"tool_calls"`
+    /// and content is still present.
     #[test]
     fn test_build_response_mixed_text_and_tools() {
         let output = CliOutput {
@@ -397,6 +428,7 @@ mod tests {
         assert!(response.choices[0].message.tool_calls.is_some());
     }
 
+    /// Error chunk injects `[Error: …]` text into the content delta.
     #[test]
     fn test_build_error_chunk() {
         let chunk = build_error_chunk("chatcmpl-err", "claude-sonnet-4", "CLI exited with code 1");

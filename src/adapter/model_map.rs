@@ -1,9 +1,17 @@
-//! Model name resolution for flexible matching.
+//! Flexible model name resolution.
+//!
+//! Accepts short aliases (`sonnet`), display names (`claude-sonnet-4`), and
+//! full dated IDs (`claude-sonnet-4-20250514`). Unrecognised names fall back
+//! to the configured default, which itself recurses with `"sonnet"` as the
+//! ultimate fallback to guarantee termination.
 
-/// Resolved Claude model identifier.
+/// A resolved Claude model with both the API model ID and a shorter
+/// human-facing display name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClaudeModel {
+    /// Full model identifier passed to `--model` (e.g. `claude-sonnet-4-20250514`).
     pub id: &'static str,
+    /// Short display name returned in API responses (e.g. `claude-sonnet-4`).
     pub display_name: &'static str,
 }
 
@@ -22,10 +30,11 @@ pub const HAIKU: ClaudeModel = ClaudeModel {
     display_name: "claude-haiku-4",
 };
 
-/// Resolve a model name string to a Claude model.
+/// Resolve an arbitrary model name to a [`ClaudeModel`].
 ///
-/// Supports full names, short aliases, and prefixed variations.
-/// Returns the default model if unrecognized.
+/// Matching is case-insensitive and whitespace-trimmed. If `input` does not
+/// match any known model, the function recurses with `default` as the input
+/// and `"sonnet"` as the fallback, guaranteeing a valid return value.
 pub fn resolve_model(input: &str, default: &str) -> ClaudeModel {
     let normalized = input.to_lowercase();
     let normalized = normalized.trim();
@@ -68,8 +77,13 @@ pub fn available_models() -> Vec<ClaudeModel> {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for model name resolution: short aliases, full names, case
+    //! insensitivity, whitespace trimming, unknown fallback, and recursive
+    //! default termination.
+
     use super::*;
 
+    /// All recognised sonnet aliases resolve to `SONNET`.
     #[test]
     fn test_resolve_sonnet_variants() {
         assert_eq!(resolve_model("sonnet", "sonnet"), SONNET);
@@ -79,6 +93,7 @@ mod tests {
         assert_eq!(resolve_model("Claude-Sonnet-4", "sonnet"), SONNET);
     }
 
+    /// All recognised opus aliases resolve to `OPUS`.
     #[test]
     fn test_resolve_opus_variants() {
         assert_eq!(resolve_model("opus", "sonnet"), OPUS);
@@ -87,6 +102,7 @@ mod tests {
         assert_eq!(resolve_model("OPUS", "sonnet"), OPUS);
     }
 
+    /// All recognised haiku aliases resolve to `HAIKU`.
     #[test]
     fn test_resolve_haiku_variants() {
         assert_eq!(resolve_model("haiku", "sonnet"), HAIKU);
@@ -95,6 +111,7 @@ mod tests {
         assert_eq!(resolve_model("HAIKU", "sonnet"), HAIKU);
     }
 
+    /// Unrecognised model names fall back to the configured default.
     #[test]
     fn test_unknown_defaults_to_configured() {
         assert_eq!(resolve_model("gpt-4o", "sonnet"), SONNET);
@@ -102,12 +119,14 @@ mod tests {
         assert_eq!(resolve_model("unknown-model", "haiku"), HAIKU);
     }
 
+    /// Leading/trailing whitespace is trimmed before matching.
     #[test]
     fn test_whitespace_handling() {
         assert_eq!(resolve_model("  sonnet  ", "sonnet"), SONNET);
         assert_eq!(resolve_model("  opus  ", "sonnet"), OPUS);
     }
 
+    /// `available_models()` returns exactly opus, sonnet, and haiku.
     #[test]
     fn test_available_models() {
         let models = available_models();
@@ -117,6 +136,7 @@ mod tests {
         assert!(models.contains(&HAIKU));
     }
 
+    /// When both input and default are unknown, recursion terminates at `"sonnet"`.
     #[test]
     fn test_resolve_model_recursive_termination() {
         // When both input and default are unrecognized, the recursive call uses

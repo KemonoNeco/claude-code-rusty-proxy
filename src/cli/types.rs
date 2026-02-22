@@ -100,8 +100,16 @@ pub struct UsageInfo {
 
 #[cfg(test)]
 mod tests {
+    //! Validate deserialisation of Claude CLI NDJSON events.
+    //!
+    //! Covers every event type (`system`, `assistant`, `user`, `result`),
+    //! content block variants (`text`, `tool_use`, `tool_result`), usage
+    //! information at both top-level and message-level, unknown-field
+    //! tolerance, and serde round-trips.
+
     use super::*;
 
+    /// `system` event: captures `session_id`, no message body.
     #[test]
     fn test_parse_system_event() {
         let json = r#"{"type":"system","session_id":"abc-123","subtype":"init"}"#;
@@ -112,6 +120,7 @@ mod tests {
         assert!(event.usage.is_none());
     }
 
+    /// `assistant` event with a single text block.
     #[test]
     fn test_parse_assistant_text_event() {
         let json = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]}}"#;
@@ -123,6 +132,7 @@ mod tests {
         assert_eq!(blocks[0].text.as_deref(), Some("Hello world"));
     }
 
+    /// `assistant` event with a `tool_use` block including id, name, and input.
     #[test]
     fn test_parse_assistant_tool_use_event() {
         let json = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01abc","name":"Bash","input":{"command":"ls"}}]}}"#;
@@ -134,6 +144,7 @@ mod tests {
         assert!(blocks[0].input.is_some());
     }
 
+    /// `user` event with a `tool_result` block referencing a tool_use_id.
     #[test]
     fn test_parse_user_tool_result_event() {
         let json = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01abc","content":"/workspace"}]}}"#;
@@ -144,6 +155,7 @@ mod tests {
         assert_eq!(blocks[0].tool_use_id.as_deref(), Some("toolu_01abc"));
     }
 
+    /// Successful `result` event with duration, turns, and result text.
     #[test]
     fn test_parse_result_event() {
         let json = r#"{"type":"result","subtype":"success","is_error":false,"duration_ms":5000,"num_turns":3,"result":"Done.","session_id":"sid-1"}"#;
@@ -155,6 +167,7 @@ mod tests {
         assert_eq!(event.result.unwrap().as_str().unwrap(), "Done.");
     }
 
+    /// Error `result` event: `is_error: true`, subtype `error_max_turns`.
     #[test]
     fn test_parse_result_error_event() {
         let json = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"duration_ms":60000,"num_turns":50}"#;
@@ -163,6 +176,7 @@ mod tests {
         assert_eq!(event.subtype.as_deref(), Some("error_max_turns"));
     }
 
+    /// All usage fields present including optional cache tokens.
     #[test]
     fn test_parse_usage_info() {
         let json = r#"{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":5}"#;
@@ -173,6 +187,7 @@ mod tests {
         assert_eq!(usage.cache_read_input_tokens, Some(5));
     }
 
+    /// Empty JSON object produces zero defaults for token counts.
     #[test]
     fn test_parse_usage_info_defaults() {
         let json = r#"{}"#;
@@ -182,6 +197,7 @@ mod tests {
         assert!(usage.cache_creation_input_tokens.is_none());
     }
 
+    /// Usage info embedded at the message level within an assistant event.
     #[test]
     fn test_parse_assistant_event_with_usage() {
         let json = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hi"}],"usage":{"input_tokens":50,"output_tokens":25}}}"#;
@@ -192,6 +208,7 @@ mod tests {
         assert_eq!(usage.output_tokens, 25);
     }
 
+    /// Usage info at the top level of the event (not inside message).
     #[test]
     fn test_parse_event_with_top_level_usage() {
         let json = r#"{"type":"assistant","usage":{"input_tokens":100,"output_tokens":200},"message":{"content":[{"type":"text","text":"test"}]}}"#;
@@ -201,6 +218,7 @@ mod tests {
         assert_eq!(usage.output_tokens, 200);
     }
 
+    /// Unrecognised JSON fields should be silently ignored (forward compat).
     #[test]
     fn test_unknown_fields_ignored() {
         let json = r#"{"type":"system","session_id":"s1","unknown_field":"value","another":42}"#;
@@ -209,6 +227,7 @@ mod tests {
         assert_eq!(event.session_id.as_deref(), Some("s1"));
     }
 
+    /// Minimal event (only `type`) defaults all optional fields to `None`.
     #[test]
     fn test_missing_optional_fields_default_to_none() {
         let json = r#"{"type":"assistant"}"#;
@@ -224,6 +243,7 @@ mod tests {
         assert!(event.usage.is_none());
     }
 
+    /// `ContentBlock` serialize -> deserialize round-trip preserves all fields.
     #[test]
     fn test_content_block_serde_roundtrip() {
         let block = ContentBlock {
@@ -242,6 +262,7 @@ mod tests {
         assert_eq!(parsed.id.as_deref(), Some("toolu_123"));
     }
 
+    /// Full `ClaudeStreamEvent` round-trip with all fields populated.
     #[test]
     fn test_full_event_serde_roundtrip() {
         let event = ClaudeStreamEvent {
@@ -270,6 +291,7 @@ mod tests {
         assert_eq!(usage.output_tokens, 200);
     }
 
+    /// Assistant message with interleaved text and tool_use blocks.
     #[test]
     fn test_mixed_content_blocks() {
         let json = r#"{"type":"assistant","message":{"content":[

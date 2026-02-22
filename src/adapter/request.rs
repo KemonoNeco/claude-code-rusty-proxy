@@ -1,11 +1,22 @@
-//! Convert OpenAI-format messages to Claude CLI prompt format.
+//! Convert an OpenAI messages array into a flat text prompt for `claude --print`.
+//!
+//! The conversion rules:
+//!
+//! | Role        | Treatment |
+//! |-------------|-----------|
+//! | `system`    | Extracted into a separate `--system-prompt` string. |
+//! | `user`      | Appended verbatim to the prompt. |
+//! | `assistant` | Wrapped in `[Assistant: …]` or `[Assistant used tools: …]`. |
+//! | `tool`      | Wrapped in `[Tool result for <name> (<id>): …]`. |
+//!
+//! Multiple parts are joined by double-newlines.
 
 use crate::types::openai::ChatMessage;
 
-/// Convert OpenAI messages to a CLI prompt and optional system prompt.
+/// Split an OpenAI messages array into `(system_prompt, user_prompt)`.
 ///
-/// Extracts system messages separately. Combines user/assistant/tool messages
-/// into a prompt suitable for `--print`.
+/// System messages are joined separately (for `--system-prompt`). All other
+/// roles are flattened into a single prompt string for `--print`.
 pub fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, String) {
     let mut system_parts = Vec::new();
     let mut prompt_parts = Vec::new();
@@ -87,9 +98,16 @@ pub fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, String) {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for OpenAI-to-CLI message conversion.
+    //!
+    //! Verifies system prompt extraction, user content passthrough, assistant
+    //! text wrapping, tool-call summarisation, tool-result formatting, unknown
+    //! role skipping, and empty-content elision.
+
     use super::*;
     use crate::types::openai::{ChatMessage, FunctionCall, MessageContent, ToolCall};
 
+    /// Helper: build a user message.
     fn user_msg(content: &str) -> ChatMessage {
         ChatMessage {
             role: "user".to_string(),
@@ -100,6 +118,7 @@ mod tests {
         }
     }
 
+    /// Helper: build a system message.
     fn system_msg(content: &str) -> ChatMessage {
         ChatMessage {
             role: "system".to_string(),
@@ -110,6 +129,7 @@ mod tests {
         }
     }
 
+    /// Helper: build an assistant text message.
     fn assistant_msg(content: &str) -> ChatMessage {
         ChatMessage {
             role: "assistant".to_string(),
@@ -120,6 +140,7 @@ mod tests {
         }
     }
 
+    /// Helper: build an assistant message with tool calls and no text.
     fn assistant_with_tools(tool_calls: Vec<ToolCall>) -> ChatMessage {
         ChatMessage {
             role: "assistant".to_string(),
@@ -130,6 +151,7 @@ mod tests {
         }
     }
 
+    /// Helper: build a tool-result message.
     fn tool_msg(call_id: &str, name: &str, content: &str) -> ChatMessage {
         ChatMessage {
             role: "tool".to_string(),
@@ -140,6 +162,7 @@ mod tests {
         }
     }
 
+    /// System messages are separated into the system prompt; user -> prompt.
     #[test]
     fn test_system_extraction() {
         let messages = vec![system_msg("You are helpful."), user_msg("Hello")];
@@ -148,6 +171,7 @@ mod tests {
         assert_eq!(prompt, "Hello");
     }
 
+    /// Multiple system messages are joined by double-newlines.
     #[test]
     fn test_multi_system_concat() {
         let messages = vec![
@@ -160,6 +184,7 @@ mod tests {
         assert_eq!(prompt, "Hello");
     }
 
+    /// Single user message with no system produces `None` system and prompt.
     #[test]
     fn test_single_user() {
         let messages = vec![user_msg("What is 2+2?")];
@@ -168,6 +193,7 @@ mod tests {
         assert_eq!(prompt, "What is 2+2?");
     }
 
+    /// Assistant text is wrapped in `[Assistant: …]` brackets.
     #[test]
     fn test_assistant_with_text() {
         let messages = vec![
@@ -182,6 +208,7 @@ mod tests {
         assert!(prompt.contains("How are you?"));
     }
 
+    /// Assistant tool calls are summarised as `[Assistant used tools: …]`.
     #[test]
     fn test_assistant_with_tool_calls() {
         let messages = vec![
@@ -200,6 +227,7 @@ mod tests {
         assert!(prompt.contains("shell"));
     }
 
+    /// Tool results are formatted as `[Tool result for <name> (<id>): …]`.
     #[test]
     fn test_tool_results() {
         let messages = vec![
@@ -211,6 +239,7 @@ mod tests {
         assert!(prompt.contains("file1.txt"));
     }
 
+    /// Empty message array produces `None` system and empty prompt.
     #[test]
     fn test_empty_messages() {
         let messages: Vec<ChatMessage> = vec![];
@@ -219,6 +248,7 @@ mod tests {
         assert!(prompt.is_empty());
     }
 
+    /// Full conversation: system + user + assistant + user.
     #[test]
     fn test_mixed_conversation() {
         let messages = vec![
@@ -234,6 +264,7 @@ mod tests {
         assert!(prompt.contains("What time is it?"));
     }
 
+    /// Messages with unrecognised roles (e.g. `developer`) are silently dropped.
     #[test]
     fn test_unknown_role_ignored() {
         let messages = vec![
@@ -253,6 +284,7 @@ mod tests {
         assert!(prompt.contains("World"));
     }
 
+    /// Messages with empty string content are skipped (no extra separators).
     #[test]
     fn test_empty_content_skipped() {
         let messages = vec![

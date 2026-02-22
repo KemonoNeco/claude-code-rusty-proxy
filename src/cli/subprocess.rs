@@ -11,17 +11,29 @@ use crate::cli::types::{ClaudeStreamEvent, UsageInfo};
 use crate::config::Config;
 use crate::error::ProxyError;
 
-/// Arguments for building a Claude CLI command.
+/// Borrowed arguments used to construct a `claude --print` invocation.
 pub struct CliArgs<'a> {
+    /// The user prompt (everything after `--print`).
     pub prompt: &'a str,
+    /// Optional system prompt (`--system-prompt`).
     pub system_prompt: Option<&'a str>,
+    /// Resolved Claude model identifier (`--model`).
     pub model: &'a str,
+    /// An existing session to resume (`--resume`).
     pub session_id: Option<&'a str>,
-    /// Forward max_tokens to CLI `--max-tokens`.
+    /// Maximum tokens for the response (`--max-tokens`).
     pub max_tokens: Option<u32>,
 }
 
-/// Build a `Command` for the Claude CLI with the given arguments.
+/// Assemble a [`Command`] for `claude --print` with all flags.
+///
+/// Flags that are always set:
+/// * `--output-format stream-json` – NDJSON on stdout
+/// * `--verbose` – include usage information in events
+/// * `--max-turns 1` – single agentic turn per invocation
+///
+/// The `CLAUDE_CODE` environment variable is removed so the proxy can
+/// itself run inside a Claude Code session without recursion.
 fn build_claude_command(args: &CliArgs) -> Command {
     let mut cmd = Command::new("claude");
     cmd.arg("--print")
@@ -56,7 +68,7 @@ fn build_claude_command(args: &CliArgs) -> Command {
     cmd
 }
 
-/// Spawn a Command, mapping common errors to ProxyError.
+/// Spawn a [`Command`], translating I/O errors into [`ProxyError`].
 fn spawn_command(cmd: &mut Command) -> Result<Child, ProxyError> {
     cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -67,34 +79,44 @@ fn spawn_command(cmd: &mut Command) -> Result<Child, ProxyError> {
     })
 }
 
-/// Parsed output from a Claude CLI invocation.
+/// Accumulated output from a complete (non-streaming) Claude CLI run.
+///
+/// Built incrementally by [`process_event`] as NDJSON lines arrive.
 #[derive(Debug, Default)]
 pub struct CliOutput {
-    /// Captured session ID from the `system` event.
+    /// Session ID from the `system` init event, used for `--resume`.
     pub session_id: Option<String>,
-    /// Aggregated text content from assistant events.
+    /// Concatenated text from all `assistant` text blocks (joined by `\n`).
     pub text_content: String,
-    /// Tool calls extracted from assistant events (id, name, input_json).
+    /// Tool-use blocks extracted from `assistant` events.
     pub tool_calls: Vec<CliToolCall>,
-    /// Whether the result event indicated an error.
+    /// `true` when the `result` event carried `is_error: true`.
     pub is_error: bool,
-    /// Aggregated input token count.
+    /// Total input tokens across all events.
     pub input_tokens: u32,
-    /// Aggregated output token count.
+    /// Total output tokens across all events.
     pub output_tokens: u32,
-    /// Result text from the `result` event (fallback content).
+    /// Plain-text from the `result` event; used as fallback when
+    /// `text_content` is empty.
     pub result_text: Option<String>,
 }
 
-/// A tool call extracted from the CLI output.
+/// A single tool invocation extracted from a `tool_use` content block.
 #[derive(Debug, Clone)]
 pub struct CliToolCall {
+    /// Unique tool-use ID (e.g. `toolu_01abc`).
     pub id: String,
+    /// Tool name (e.g. `Bash`, `Read`).
     pub name: String,
+    /// JSON-encoded input parameters.
     pub arguments_json: String,
 }
 
-/// Spawn the Claude CLI and collect its full output (non-streaming).
+/// Run `claude --print` to completion and return the parsed output.
+///
+/// Stderr is drained in a background task for debug logging. The whole
+/// invocation is wrapped in a [`tokio::time::timeout`] governed by
+/// [`Config::timeout`].
 pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput, ProxyError> {
     let mut cmd = build_claude_command(args);
     let mut child = spawn_command(&mut cmd)?;
@@ -159,7 +181,10 @@ pub async fn run_claude(args: &CliArgs<'_>, config: &Config) -> Result<CliOutput
     Ok(output)
 }
 
-/// Spawn the Claude CLI and return the child process + a stream of events (for SSE streaming).
+/// Spawn `claude --print` and return the child handle + its stdout pipe.
+///
+/// The caller is responsible for reading NDJSON lines from stdout and
+/// for killing/waiting on the child once done.
 pub async fn spawn_claude_streaming(
     args: &CliArgs<'_>,
 ) -> Result<(tokio::process::Child, tokio::process::ChildStdout), ProxyError> {
@@ -185,7 +210,7 @@ pub async fn spawn_claude_streaming(
     Ok((child, stdout))
 }
 
-/// Parse NDJSON streaming output from the Claude CLI into a collected output.
+/// Read all NDJSON lines from `stdout` and fold them into a [`CliOutput`].
 pub async fn parse_ndjson_stream(
     stdout: tokio::process::ChildStdout,
 ) -> Result<CliOutput, ProxyError> {
@@ -213,7 +238,8 @@ pub async fn parse_ndjson_stream(
     Ok(output)
 }
 
-/// Parse a single NDJSON line into a `ClaudeStreamEvent`.
+/// Try to deserialise a single NDJSON line; returns `None` for blank or
+/// unparseable lines.
 pub fn parse_event(line: &str) -> Option<ClaudeStreamEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -222,7 +248,12 @@ pub fn parse_event(line: &str) -> Option<ClaudeStreamEvent> {
     serde_json::from_str(trimmed).ok()
 }
 
-/// Process a single event, updating the accumulated output.
+/// Fold a single [`ClaudeStreamEvent`] into the running [`CliOutput`].
+///
+/// * `system` events capture the session ID.
+/// * `assistant` events extract text and tool-use blocks.
+/// * `result` events capture the final status and optional result text.
+/// * Usage tokens are accumulated from every event.
 pub fn process_event(output: &mut CliOutput, event: &ClaudeStreamEvent) {
     aggregate_usage(output, event);
 
@@ -282,7 +313,7 @@ pub fn process_event(output: &mut CliOutput, event: &ClaudeStreamEvent) {
     }
 }
 
-/// Aggregate usage information from an event.
+/// Sum top-level and message-level usage tokens into `output`.
 fn aggregate_usage(output: &mut CliOutput, event: &ClaudeStreamEvent) {
     if let Some(ref usage) = event.usage {
         add_usage(output, usage);
@@ -313,8 +344,16 @@ fn truncate_str(s: &str, max_len: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for NDJSON parsing and event processing.
+    //!
+    //! Uses `parse_ndjson_from_str` to simulate multi-line CLI output and
+    //! verify that `CliOutput` is built correctly: session ID capture, text
+    //! aggregation, tool-call extraction, usage summation, result flags,
+    //! and graceful handling of non-JSON lines.
+
     use super::*;
 
+    /// Simulate `parse_ndjson_stream` synchronously from a string.
     fn parse_ndjson_from_str(ndjson: &str) -> CliOutput {
         let mut output = CliOutput::default();
         for line in ndjson.lines() {
@@ -325,6 +364,7 @@ mod tests {
         output
     }
 
+    /// `system` event stores the session ID on the output.
     #[test]
     fn test_parse_system_event_captures_session_id() {
         let ndjson = r#"{"type":"system","session_id":"sess-abc-123","subtype":"init"}
@@ -333,6 +373,7 @@ mod tests {
         assert_eq!(output.session_id.as_deref(), Some("sess-abc-123"));
     }
 
+    /// Multiple assistant text events are joined by newlines.
     #[test]
     fn test_parse_assistant_text_aggregated() {
         let ndjson = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "}]}}
@@ -342,6 +383,7 @@ mod tests {
         assert_eq!(output.text_content, "Hello \nworld!");
     }
 
+    /// Tool-use blocks are extracted into `CliToolCall` with id, name, args.
     #[test]
     fn test_parse_tool_use_blocks() {
         let ndjson = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"ls"}}]}}
@@ -353,6 +395,7 @@ mod tests {
         assert!(output.tool_calls[0].arguments_json.contains("command"));
     }
 
+    /// A single event with both text and tool_use blocks populates both.
     #[test]
     fn test_parse_mixed_text_and_tool_use() {
         let ndjson = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"file.txt"}}]}}
@@ -363,6 +406,7 @@ mod tests {
         assert_eq!(output.tool_calls[0].name, "Read");
     }
 
+    /// Successful result captures `is_error: false` and result text.
     #[test]
     fn test_parse_result_success() {
         let ndjson = r#"{"type":"result","is_error":false,"result":"All done.","num_turns":3}"#;
@@ -371,6 +415,7 @@ mod tests {
         assert_eq!(output.result_text.as_deref(), Some("All done."));
     }
 
+    /// Error result sets `is_error: true`.
     #[test]
     fn test_parse_result_error() {
         let ndjson = r#"{"type":"result","is_error":true,"result":"Something went wrong"}"#;
@@ -378,6 +423,7 @@ mod tests {
         assert!(output.is_error);
     }
 
+    /// Usage tokens across multiple events are summed.
     #[test]
     fn test_parse_usage_info_aggregated() {
         let ndjson = r#"{"type":"assistant","usage":{"input_tokens":100,"output_tokens":50},"message":{"content":[{"type":"text","text":"Hi"}]}}
@@ -388,6 +434,7 @@ mod tests {
         assert_eq!(output.output_tokens, 80);
     }
 
+    /// Non-JSON lines are silently skipped; valid events still parsed.
     #[test]
     fn test_parse_non_json_lines_skipped() {
         let ndjson =
@@ -397,6 +444,7 @@ mod tests {
         assert_eq!(output.result_text.as_deref(), Some("ok"));
     }
 
+    /// Empty input produces a default (empty) output.
     #[test]
     fn test_parse_empty_stream() {
         let output = parse_ndjson_from_str("");
@@ -405,6 +453,7 @@ mod tests {
         assert!(output.tool_calls.is_empty());
     }
 
+    /// Valid JSON returns `Some(event)`.
     #[test]
     fn test_parse_event_valid() {
         let event = parse_event(r#"{"type":"system","session_id":"s1"}"#);
@@ -412,11 +461,13 @@ mod tests {
         assert_eq!(event.unwrap().event_type, "system");
     }
 
+    /// Invalid JSON returns `None`.
     #[test]
     fn test_parse_event_invalid() {
         assert!(parse_event("not json").is_none());
     }
 
+    /// Empty/whitespace-only lines return `None`.
     #[test]
     fn test_parse_event_empty() {
         assert!(parse_event("").is_none());

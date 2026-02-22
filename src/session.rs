@@ -1,18 +1,28 @@
 //! Session management for multi-turn conversations.
 //!
-//! Maps thread IDs to Claude CLI session IDs for `--resume` support.
+//! The OpenAI chat API is stateless, but Claude CLI supports continuing a
+//! conversation via `--resume <session-id>`. This module bridges the two by
+//! maintaining a `thread_id -> session_id` lookup table with automatic
+//! TTL-based expiration.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Entry in the session store.
+/// Internal entry stored per active thread.
 struct SessionEntry {
+    /// The Claude CLI session ID returned in the `system` NDJSON event.
     session_id: String,
+    /// Wall-clock time of the most recent access (store or get).
     last_used: Instant,
 }
 
-/// Manages thread -> session_id mappings with TTL-based cleanup.
+/// Thread-safe, TTL-aware map from OpenAI-style `thread_id` values to
+/// Claude CLI session IDs.
+///
+/// Entries that have not been accessed within [`ttl`] are treated as expired
+/// and ignored on [`get`](Self::get). A separate
+/// [`cleanup_expired`](Self::cleanup_expired) method physically removes them.
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, SessionEntry>>,
     ttl: Duration,
@@ -67,8 +77,12 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
+    //! Tests for session management: store/get, TTL expiry, cleanup, and
+    //! concurrent access safety.
+
     use super::*;
 
+    /// Basic store-then-get should return the stored session ID.
     #[test]
     fn test_store_and_get() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
@@ -76,6 +90,7 @@ mod tests {
         assert_eq!(mgr.get("thread-1").as_deref(), Some("sess-abc"));
     }
 
+    /// Storing again with the same thread ID replaces the previous session.
     #[test]
     fn test_overwrite() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
@@ -84,6 +99,7 @@ mod tests {
         assert_eq!(mgr.get("thread-1").as_deref(), Some("sess-new"));
     }
 
+    /// `clear()` removes a specific thread's session.
     #[test]
     fn test_clear() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
@@ -92,6 +108,7 @@ mod tests {
         assert!(mgr.get("thread-1").is_none());
     }
 
+    /// Different thread IDs map to independent sessions.
     #[test]
     fn test_independent_threads() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
@@ -101,21 +118,23 @@ mod tests {
         assert_eq!(mgr.get("thread-2").as_deref(), Some("sess-2"));
     }
 
+    /// Looking up a thread that was never stored returns `None`.
     #[test]
     fn test_missing_thread() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
         assert!(mgr.get("nonexistent").is_none());
     }
 
+    /// With a zero TTL, entries expire immediately after store.
     #[test]
     fn test_ttl_expiry() {
-        // Use a zero TTL so entries expire immediately
         let mgr = SessionManager::new(Duration::from_secs(0));
         mgr.store("thread-1", "sess-abc".to_string());
         // Entry should be expired
         assert!(mgr.get("thread-1").is_none());
     }
 
+    /// `cleanup_expired()` physically removes all expired entries.
     #[test]
     fn test_cleanup_expired() {
         let mgr = SessionManager::new(Duration::from_secs(0));
@@ -126,6 +145,7 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
+    /// `cleanup_expired()` keeps entries that are still within the TTL.
     #[test]
     fn test_cleanup_retains_fresh_sessions() {
         let mgr = SessionManager::new(Duration::from_secs(3600));
@@ -137,6 +157,7 @@ mod tests {
         assert_eq!(mgr.get("thread-2").as_deref(), Some("sess-2"));
     }
 
+    /// Concurrent store/get from 10 threads should not panic or lose data.
     #[test]
     fn test_concurrent_access() {
         use std::sync::Arc;

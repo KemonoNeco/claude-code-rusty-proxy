@@ -1,4 +1,19 @@
-//! Integration tests for HTTP handlers using tower::ServiceExt.
+//! Integration tests for the HTTP endpoints.
+//!
+//! Uses `tower::ServiceExt::oneshot` to drive the Axum router in-process
+//! without binding a real TCP socket. This keeps the tests fast and
+//! deterministic — no `claude` binary is needed because only request
+//! validation paths are exercised (not actual CLI invocations).
+//!
+//! ## Test inventory
+//!
+//! | Test | Validates |
+//! |------|-----------|
+//! | `test_health_endpoint` | `GET /health` returns 200 with `{"status":"ok"}`. |
+//! | `test_models_endpoint` | `GET /v1/models` lists all 3 models in OpenAI format. |
+//! | `test_chat_completions_empty_messages` | Empty messages array -> 400 `invalid_request_error`. |
+//! | `test_chat_completions_invalid_json` | Malformed JSON body -> 400/422. |
+//! | `test_chat_completions_system_only_messages` | System-only messages (no user content) -> 400. |
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -8,6 +23,7 @@ use tower::util::ServiceExt;
 use claude_code_rusty_proxy::config::Config;
 use claude_code_rusty_proxy::server;
 
+/// Build a test-only [`Config`] with port 0 and sensible defaults.
 fn test_config() -> Config {
     Config {
         port: 0,
@@ -18,11 +34,13 @@ fn test_config() -> Config {
     }
 }
 
+/// Construct the full router with test state (no TCP listener).
 fn build_app() -> axum::Router {
     let state = server::create_state(test_config());
     server::build_router(state)
 }
 
+/// `GET /health` should return 200 with `{"status":"ok","provider":"claude-code-rusty-proxy"}`.
 #[tokio::test]
 async fn test_health_endpoint() {
     let app = build_app();
@@ -45,6 +63,7 @@ async fn test_health_endpoint() {
     assert_eq!(json["provider"], "claude-code-rusty-proxy");
 }
 
+/// `GET /v1/models` should list opus, sonnet, and haiku with correct metadata.
 #[tokio::test]
 async fn test_models_endpoint() {
     let app = build_app();
@@ -78,6 +97,7 @@ async fn test_models_endpoint() {
     }
 }
 
+/// `POST /v1/chat/completions` with `messages: []` -> 400 `invalid_request_error`.
 #[tokio::test]
 async fn test_chat_completions_empty_messages() {
     let app = build_app();
@@ -102,7 +122,8 @@ async fn test_chat_completions_empty_messages() {
     assert!(json["error"]["message"].as_str().unwrap().contains("empty"));
 }
 
-/// Assert the response body matches OpenAI error JSON structure.
+/// Assert the response body matches the OpenAI error JSON structure:
+/// `{ "error": { "message": "…", "type": "…", "param": null, "code": null } }`.
 fn assert_openai_error(json: &serde_json::Value, expected_type: &str) {
     assert!(json["error"].is_object(), "error field must be an object");
     assert!(
@@ -118,6 +139,7 @@ fn assert_openai_error(json: &serde_json::Value, expected_type: &str) {
     assert!(json["error"]["code"].is_null(), "error.code must be null");
 }
 
+/// Non-JSON body -> Axum returns 400 or 422 (deserialization rejection).
 #[tokio::test]
 async fn test_chat_completions_invalid_json() {
     let app = build_app();
@@ -144,6 +166,7 @@ async fn test_chat_completions_invalid_json() {
     assert!(!body.is_empty());
 }
 
+/// A system-only message array has no user content -> 400 `invalid_request_error`.
 #[tokio::test]
 async fn test_chat_completions_system_only_messages() {
     let app = build_app();
