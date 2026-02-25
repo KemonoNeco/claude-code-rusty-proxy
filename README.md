@@ -21,7 +21,7 @@ Multi-turn conversations are supported via a `thread_id` field in the request, w
 ## Installation
 
 ```bash
-git clone https://github.com/<your-org>/claude-code-rusty-proxy.git
+git clone https://github.com/KemonoNeco/claude-code-rusty-proxy.git
 cd claude-code-rusty-proxy
 cargo build --release
 ```
